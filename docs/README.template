@@ -1,0 +1,14 @@
+pydacefit
+==================================
+
+Installation
+==================================
+{% include 'source/_installation.rst' %}
+
+Usage
+==================================
+{% include 'source/_usage.rst' %}
+
+Contact
+==================================
+{% include 'source/_contact.rst' %}
