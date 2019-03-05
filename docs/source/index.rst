@@ -2,6 +2,8 @@
    :maxdepth: 2
    :caption: Contents:
 
+.. include:: _general.rst
+
 
 Installation
 ==================================

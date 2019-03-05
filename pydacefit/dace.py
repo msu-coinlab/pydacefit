@@ -66,15 +66,12 @@ class DACE:
         nY = (Y - mY) / sY
 
         # check the hyperparamters
-        if self.theta:
-            if self.tl and self.tu:
-                self.model = {'nX': nX, 'nY': nY}
-                self.boxmin()
-                self.model = self.itpar["best"]
-            else:
-                self.model = fit(nX, nY, self.regr, self.kernel, self.theta)
+        if self.tl is not None and self.tu is not None:
+            self.model = {'nX': nX, 'nY': nY}
+            self.boxmin()
+            self.model = self.itpar["best"]
         else:
-            raise Exception("An initial theta needs to be supplied.")
+            self.model = fit(nX, nY, self.regr, self.kernel, self.theta)
 
         self.model = {**self.model, 'mX': mX, 'sX': sX, 'mY': mY, 'sY': sY, 'nX': nX, 'nY': nY}
         self.model['sigma2'] = np.square(sY) @ self.model['_sigma2']
