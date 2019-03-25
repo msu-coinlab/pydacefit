@@ -17,7 +17,7 @@ class DACE:
             Type of regression that should be used: regr_constant, regr_linear or regr_quadratic
 
         corr : callable
-            Type of correlation (kernel9 that should be used: corr_gauss
+            Type of correlation (kernel) that should be used. default: corr_gauss
 
         theta : float
             Initial value of theta. Can be a vector or a float
@@ -109,13 +109,11 @@ class DACE:
         if not np.isinf(f):
 
             for k in range(kmax):
-
+                # save the last theta before exploring
                 last_t = itpar["best"]["theta"]
-                has_improved = explore(self, itpar)
 
-                if not has_improved:
-                    itpar["D"] = np.power(itpar["D"], 0.2)
-                else:
-                    move(last_t, self, itpar)
+                # do the actual explore step
+                explore(self, itpar)
+                move(last_t, self, itpar)
 
         self.itpar = itpar

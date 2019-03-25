@@ -4,7 +4,14 @@ from pydacefit.fit import fit
 
 
 def start(theta, dace):
-    t, lo, up, p = theta, dace.tl, dace.tu, 1
+    t, lo, up = theta, dace.tl, dace.tu
+
+    # check whether theta is a vector or not
+    if type(dace.tu) != np.ndarray:
+        p = 1
+    else:
+        p = len(dace.tu)
+
     D = np.power(2, np.arange(1, p + 1).T / (p + 2))
 
     # if the equality constraint is equal then no search necessary
@@ -41,7 +48,7 @@ def start(theta, dace):
 
     # try to improve starting guess if out of bounds
     if len(ng) > 0:
-        raise Exception("Not implemented yet.")
+        raise Exception("Theta should always be in bounds in this implementation. Not implemented yet.")
 
     return itpar
 
@@ -61,14 +68,19 @@ def evaluate_and_set_best(tt, dace, itpar):
 
 
 def explore(dace, itpar):
-    t = itpar["best"]["theta"]
     ne, D, lo, up = itpar["ne"], itpar["D"], itpar["lo"], itpar["up"]
 
     for k in range(len(ne)):
 
         j = ne[k]
-        tt = np.copy(t)
+
+        # theta of the current best model
+        t = itpar["best"]["theta"]
+
         DD = D[j]
+
+        # copy the theta before modifying it
+        tt = np.copy(t)
 
         if t[j] == up[j]:
             tt[j] = t[j] / np.sqrt(DD)
@@ -88,17 +100,22 @@ def explore(dace, itpar):
                 tt = np.copy(t)
                 tt[j] = max(lo[j], t[j] / DD)
 
-                has_improved = evaluate_and_set_best(tt, dace, itpar)
-
-        return has_improved
+                evaluate_and_set_best(tt, dace, itpar)
 
 
 def move(th, dace, itpar):
-
     p, ne, D, lo, up = itpar["p"], itpar["ne"], itpar["D"], itpar["lo"], itpar["up"]
+
+    # index used later on for permutation
+    I = np.concatenate([np.arange(1, p), [0]])
 
     t = itpar["best"]["theta"]
     v = t / th
+
+    # if t and th is all equal
+    if np.all(v == 1):
+        itpar["D"] = np.power(itpar["D"][I], 0.2)
+        return
 
     cont = True
 
@@ -109,11 +126,17 @@ def move(th, dace, itpar):
         tt[tt > up] = up[tt > up]
         tt[tt < lo] = lo[tt < lo]
 
-        cont = evaluate_and_set_best(tt, dace, itpar)
-        if cont:
+        has_improved = evaluate_and_set_best(tt, dace, itpar)
+
+        # if it has improved we increment the step size
+        if has_improved:
             v = np.power(v, 2)
 
+        # only if improved we continue
+        cont = has_improved
+
+        # however, in case we already on the bounds we stop
         if np.any(np.logical_or(tt == lo, tt == up)):
             cont = False
 
-    itpar["D"] = np.power(itpar["D"], 0.25)
+    itpar["D"] = np.power(itpar["D"][I], 0.25)
