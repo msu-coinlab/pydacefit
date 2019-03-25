@@ -76,7 +76,7 @@ class DACE:
         self.model = {**self.model, 'mX': mX, 'sX': sX, 'mY': mY, 'sY': sY, 'nX': nX, 'nY': nY}
         self.model['sigma2'] = np.square(sY) @ self.model['_sigma2']
 
-    def predict(self, _X):
+    def predict(self, _X, return_mse=False):
 
         mX, sX, nX = self.model['mX'], self.model['sX'], self.model['nX']
         mY, sY = self.model['mY'], self.model['sY']
@@ -95,7 +95,20 @@ class DACE:
         _sY = _F @ beta + (gamma.T @ _R.T).T
         _Y = (_sY * sY) + mY
 
-        return _Y
+        ret = [_Y]
+
+        if return_mse:
+            rt = np.linalg.lstsq(self.model['C'], _R.T, rcond=None)[0]
+            #np.linalg.lstsq(self.model["G"],((self.model["Ft"].T @ rt).T - _F))
+            #u = ((self.model["Ft"].T @ rt).T - _F) / self.model["G"]
+            u = ((self.model["Ft"].T @ rt).T - _F) @ np.linalg.inv(self.model["G"])
+            mse = self.model["sigma2"] * (1 + np.sum(u ** 2, axis=1) - np.sum(rt ** 2, axis=0))
+            ret.append(mse[:, None])
+
+        if len(ret) == 1:
+            return ret[0]
+        else:
+            return tuple(ret)
 
     def boxmin(self):
 
