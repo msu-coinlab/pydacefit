@@ -54,9 +54,18 @@ def start(theta, dace):
 
 
 def evaluate_and_set_best(tt, dace, itpar):
+
     # evaluate the model and append
-    model = fit(dace.model["nX"], dace.model["nY"], dace.regr, dace.kernel, tt)
-    itpar["models"].append(model)
+    try:
+        model = fit(dace.model["nX"], dace.model["nY"], dace.regr, dace.kernel, tt)
+        itpar["models"].append(model)
+
+    except:
+        itpar["models"].append({
+            "theta": tt,
+            "obj": np.inf
+        })
+        return False
 
     # flag the model as best if it is
     best = itpar["best"]

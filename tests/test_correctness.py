@@ -4,7 +4,7 @@ import os.path
 
 import numpy as np
 
-from pydacefit.corr import corr_gauss, corr_cubic, corr_exp, corr_lin, corr_spherical
+from pydacefit.corr import corr_gauss, corr_cubic, corr_exp, corr_lin, corr_spherical, corr_spline, corr_expg
 from pydacefit.dace import DACE
 from pydacefit.regr import regr_constant, regr_linear, regr_quadratic
 
@@ -30,18 +30,20 @@ class CorrectTest(unittest.TestCase):
 
         tests = [
 
-           # ("constant_corrgaus_1", DACE(regr=regr_constant, corr=corr_gauss, theta=1.0, tl=None, tu=None)),
-           # ("constant_corrgaus_opt", DACE(regr=regr_constant, corr=corr_gauss, theta=0.1, tl=0.01, tu=20)),
-           # ("linear_corrgaus_opt", DACE(regr=regr_linear, corr=corr_gauss, theta=0.1, tl=0.01, tu=20)),
+           ("constant_corrgaus_1", DACE(regr=regr_constant, corr=corr_gauss, theta=1.0, tl=None, tu=None)),
+           ("constant_corrgaus_opt", DACE(regr=regr_constant, corr=corr_gauss, theta=0.1, tl=0.01, tu=20)),
+           ("linear_corrgaus_opt", DACE(regr=regr_linear, corr=corr_gauss, theta=0.1, tl=0.01, tu=20)),
            ("quadratic_corrgauss_opt", DACE(regr=regr_quadratic, corr=corr_gauss, theta=0.1, tl=0.01, tu=20)),
-           # ("constant_corrgaus_vector", DACE(regr=regr_linear, corr=corr_gauss, theta=np.array([0.1, 0.2, 0.3]), tl=None, tu=None)),
-           # ("constant_corrgaus_vector_opt", DACE(regr=regr_constant, corr=corr_gauss, theta=np.array([0.1, 0.2, 0.3]), tl=np.array([0.01, 0.02, 0.03]), tu=np.array([20, 30, 40]))),
-           # ("constant_corrcubic_opt", DACE(regr=regr_constant, corr=corr_cubic, theta=0.1, tl=0.01, tu=20)),
-           # ("constant_correxp_vector_opt", DACE(regr=regr_constant, corr=corr_exp, theta=np.array([1.0, 1.0, 1.0]), tl=tl, tu=tu)),
-           # ("constant_corrlin_vector_opt", DACE(regr=regr_constant, corr=corr_lin, theta=np.array([0.1, 0.1, 0.1]), tl=tl, tu=tu)),
-           # ("constant_corrspherical_vector_opt", DACE(regr=regr_constant, corr=corr_spherical, theta=np.array([0.1, 0.1, 0.1]), tl=tl, tu=tu))
-
-           #("constant_corrgauss_mse", DACE(regr=regr_constant, corr=corr_gauss, theta=0.1, tl=None, tu=None)),
+           ("constant_corrgaus_vector", DACE(regr=regr_linear, corr=corr_gauss, theta=np.array([0.1, 0.2, 0.3]), tl=None, tu=None)),
+           ("constant_corrgaus_vector_opt", DACE(regr=regr_constant, corr=corr_gauss, theta=np.array([0.1, 0.2, 0.3]), tl=np.array([0.01, 0.02, 0.03]), tu=np.array([20, 30, 40]))),
+           ("constant_corrcubic_opt", DACE(regr=regr_constant, corr=corr_cubic, theta=0.1, tl=0.01, tu=20)),
+           ("constant_correxp_vector_opt", DACE(regr=regr_constant, corr=corr_exp, theta=np.array([1.0, 1.0, 1.0]), tl=tl, tu=tu)),
+           ("constant_corrlin_vector_opt", DACE(regr=regr_constant, corr=corr_lin, theta=np.array([0.1, 0.1, 0.1]), tl=tl, tu=tu)),
+           ("constant_corrspherical_vector_opt", DACE(regr=regr_constant, corr=corr_spherical, theta=np.array([0.1, 0.1, 0.1]), tl=tl, tu=tu)),
+           ("constant_corrspline_opt", DACE(regr=regr_constant, corr=corr_spline, theta=0.1, tl=0.01, tu=20)),
+           ("constant_correxpg_opt", DACE(regr=regr_constant, corr=corr_expg, theta=np.array([0.1, 0.1]), tl=tl[:2], tu=tu[:2])),
+           ("constant_corrgauss_mse", DACE(regr=regr_constant, corr=corr_gauss, theta=0.1, tl=None, tu=None)),
+           #("constant_corrgauss_grad", DACE(regr=regr_constant, corr=corr_gauss, theta=0.1, tl=0.01, tu=20)),
 
         ]
 
@@ -49,9 +51,9 @@ class CorrectTest(unittest.TestCase):
 
             print(name)
 
-            X_train, F_train, X_test, correct, mse = tuple(load(name, ["x_train", "f_train", "x_test", "f_test", "mse"]))
+            X_train, F_train, X_test, correct, mse, grad = tuple(load(name, ["x_train", "f_train", "x_test", "f_test", "mse", "grad"]))
             dacefit.fit(X_train, F_train)
-            pred, _mse = dacefit.predict(X_test, return_mse=True)
+            pred, _mse, _grad = dacefit.predict(X_test, return_mse=True, return_gradient=True)
 
             if dacefit.tl is not None:
                 theta, = load(name, ["theta"])
@@ -68,6 +70,9 @@ class CorrectTest(unittest.TestCase):
 
             if mse is not None:
                 self.assertTrue(np.all(np.abs(mse[:, None] - _mse) < 0.00001))
+
+            if grad is not None:
+                self.assertTrue(np.all(np.abs(grad[:, None] - _grad) < 0.00001))
 
 
 if __name__ == '__main__':

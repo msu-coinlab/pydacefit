@@ -1,9 +1,8 @@
 import numpy as np
 
 
-def regr_constant(X):
+def regr_constant(X, return_gradient=False):
     return np.ones((X.shape[0], 1))
-
 
 def regr_linear(X):
     return np.column_stack([np.ones((X.shape[0], 1)), X])
