@@ -1,7 +1,10 @@
 pydacefit
 ==================================
 
+The documentation can be found here:
+https://www.egr.msu.edu/coinlab/blankjul/pydacefit/
 
+{% include 'source/_general.rst' %}
 
 Installation
 ==================================

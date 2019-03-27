@@ -1,7 +1,11 @@
 pydacefit
 ==================================
 
+The documentation can be found here:
+https://www.egr.msu.edu/coinlab/blankjul/pydacefit/
 
+The purpose of this clone is to have a python version of the popular dacefit toolbox in MATLAB .
+This framework is an exact clone of the original code and the correctness has been checked.
 
 Installation
 ==================================

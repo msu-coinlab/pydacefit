@@ -6,8 +6,12 @@ from pydacefit.regr import *
 
 class DACE:
 
-    def __init__(self, regr=regr_constant, corr=corr_gauss, theta=1.0, tl=0.0, tu=100.0):
+    def __init__(self, regr=regr_constant, corr=corr_gauss, theta=1.0, thetaL=0.0, thetaU=100.0):
         """
+
+        This is the main object of this framework. It can be initialized with different regression and correlation
+        types. Also, it can be defined if hyper parameter optimization should be used or not.
+
 
         Parameters
         ----------
@@ -20,10 +24,10 @@ class DACE:
         theta : float
             Initial value of theta. Can be a vector or a float
 
-        tl : float
+        thetaL : float
             The lower bound if theta should be optimized.
 
-        tu : float
+        thetaU : float
             The upper bound if theta should be optimized.
 
         """
@@ -39,8 +43,8 @@ class DACE:
         self.theta = theta
 
         # lower and upper bound if it should be optimized
-        self.tl = tl
-        self.tu = tu
+        self.tl = np.array(thetaL) if type(thetaL) == list else thetaL
+        self.tu = np.array(thetaU) if type(thetaU) == list else thetaU
 
         # intermediate steps saved during hyperparameter optimization
         self.itpar = None
@@ -128,7 +132,8 @@ class DACE:
 
             # the gradient must be calculated for each point at once
             for i, _x in enumerate(_nX):
-                # is not implemented yet - for whatever reason here the values were not matching
+
+                # is not implemented yet - here precision problems started to occur and results did not match
                 _mse_grad[i] = np.nan
 
             ret.append(_mse_grad)
