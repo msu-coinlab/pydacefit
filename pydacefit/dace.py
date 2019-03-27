@@ -1,9 +1,7 @@
-import numpy as np
-
 from pydacefit.boxmin import start, explore, move
-from pydacefit.corr import corr_gauss, calc_kernel_matrix
+from pydacefit.corr import *
 from pydacefit.fit import fit
-from pydacefit.regr import regr_constant
+from pydacefit.regr import *
 
 
 class DACE:
@@ -76,20 +74,20 @@ class DACE:
         self.model = {**self.model, 'mX': mX, 'sX': sX, 'mY': mY, 'sY': sY, 'nX': nX, 'nY': nY}
         self.model['sigma2'] = np.square(sY) @ self.model['_sigma2']
 
-    def predict(self, _X, return_mse=False, return_gradient=False):
+    def predict(self, _X, return_mse=False, return_gradient=False, return_mse_gradient=False):
 
         mX, sX, nX = self.model['mX'], self.model['sX'], self.model['nX']
         mY, sY = self.model['mY'], self.model['sY']
-        regr, kernel, theta = self.regr, self.kernel, self.model["theta"]
+        regr, corr, theta = self.regr, self.kernel, self.model["theta"]
         beta, gamma = self.model['beta'], self.model['gamma']
 
         # normalize the input given the mX and sX that was fitted before
         # NOTE: For the values to predict the _ is added to clarify its not the data fitted before
         _nX = (_X - mX) / sX
 
-        # calculate regression and kernel
+        # calculate regression and corr
         _F = regr(_nX)
-        _R = calc_kernel_matrix(_nX, nX, kernel, theta)
+        _R = calc_kernel_matrix(_nX, nX, corr, theta)
 
         # predict and destandardize
         _sY = _F @ beta + (gamma.T @ _R.T).T
@@ -98,18 +96,42 @@ class DACE:
         ret = [_Y]
 
         if return_mse:
+
             rt = np.linalg.lstsq(self.model['C'], _R.T, rcond=None)[0]
-            u = ((self.model["Ft"].T @ rt).T - _F) @ np.linalg.inv(self.model["G"])
-            mse = self.model["sigma2"] * (1 + np.sum(u ** 2, axis=1) - np.sum(rt ** 2, axis=0))
+            u = (self.model["Ft"].T @ rt).T - _F
+            v = u @ np.linalg.inv(self.model["G"])
+            mse = self.model["sigma2"] * (1 + np.sum(v ** 2, axis=1) - np.sum(rt ** 2, axis=0))
             ret.append(mse[:, None])
 
         if return_gradient:
-            grad = np.zeros(_X.shape)
 
-            for i in range(len(_X)):
-                grad[i] = 1
+            # the final gradient matrix
+            _grad = np.zeros(_X.shape)
 
-            ret.append(grad)
+            # the gradient must be calculated for each point at once
+            for i, _x in enumerate(_nX):
+                _dF = get_gradient_func(self.regr)(_x[None, :])
+                _dR = calc_grad(_x[None, :], nX, get_gradient_func(corr), theta)
+
+                dy = (_dF @ self.model["beta"]).T + self.model["gamma"].T @ _dR
+                _grad[i] = dy * self.model["sY"] / self.model["sX"]
+
+            ret.append(_grad)
+
+        if return_mse_gradient:
+
+            if not return_mse or not return_gradient:
+                raise Exception("To evaluate the gradient of MSE, you must calculate the gradient and MSE as well.")
+
+            # the final gradient matrix
+            _mse_grad = np.zeros(_X.shape)
+
+            # the gradient must be calculated for each point at once
+            for i, _x in enumerate(_nX):
+                # is not implemented yet - for whatever reason here the values were not matching
+                _mse_grad[i] = np.nan
+
+            ret.append(_mse_grad)
 
         if len(ret) == 1:
             return ret[0]
@@ -136,3 +158,11 @@ class DACE:
                 move(last_t, self, itpar)
 
         self.itpar = itpar
+
+
+def get_gradient_func(func):
+    try:
+
+        return globals()[func.__name__ + "_grad"]
+    except:
+        return None
