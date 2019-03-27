@@ -4,16 +4,20 @@ pydacefit
 The documentation can be found here:
 https://www.egr.msu.edu/coinlab/blankjul/pydacefit/
 
-{% include 'source/_general.rst' %}
+{% include 'docs/source/_general.rst' %}
 
 Installation
 ==================================
-{% include 'source/_installation.rst' %}
+{% include 'docs/source/_installation.rst' %}
 
 Usage
 ==================================
-{% include 'source/_usage.rst' %}
+
+.. code:: python
+
+    {% macro someop() %}{% include "pydacefit/usage.py" %}{% endmacro %}
+    {{ someop()|indent }}
 
 Contact
 ==================================
-{% include 'source/_contact.rst' %}
+{% include 'docs/source/_contact.rst' %}
