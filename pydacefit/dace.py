@@ -163,8 +163,12 @@ class DACE:
 
 
 def get_gradient_func(func):
-    # the analytic gradient lives alongside its function as `<name>_grad`
-    name = func.__name__ + "_grad"
+    # callable kernels may carry their own analytic gradient as a `.grad`;
+    # plain-function kernels expose it as a module-level `<name>_grad`.
+    own = getattr(func, "grad", None)
+    if callable(own):
+        return own
+    name = getattr(func, "__name__", "") + "_grad"
     for module in (_corr, _regr):
         grad = getattr(module, name, None)
         if grad is not None:

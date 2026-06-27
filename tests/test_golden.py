@@ -16,6 +16,7 @@ from pydacefit.corr import (
     corr_expg,
     corr_gauss,
     corr_lin,
+    corr_rq,
     corr_spherical,
     corr_spline,
 )
@@ -57,6 +58,8 @@ CASES = [
     ("lin/quad/noopt", regr_quadratic, corr_lin, _NOOPT),
     ("expg/const/noopt", regr_constant, corr_expg, _EXPG),
     ("expg/const/opt-ard", regr_constant, corr_expg, _EXPG_OPT),
+    ("rq/const/opt-scalar", regr_constant, corr_rq, _OPT),
+    ("rq/quad/opt-ard", regr_quadratic, corr_rq, _ARD),
 ]
 
 

@@ -161,5 +161,43 @@ def corr_expg_grad(D, theta):
     return power * -_theta * np.sign(D) * np.abs(D) ** (power - 1) * corr_expg(D, theta)[:, None]
 
 
+class RationalQuadratic:
+    """Rational Quadratic correlation kernel: an (infinite) scale-mixture of Gaussians.
+
+    The shape parameter ``alpha`` sets the tails -- small alpha gives heavier tails
+    (more robust across length scales), and ``alpha -> inf`` recovers ``corr_gauss``.
+    It is a fixed construction parameter, deliberately kept out of ``theta`` (which
+    ``boxmin`` tunes by maximum likelihood): tuning a shape parameter on a small
+    sample overfits, so it belongs to the kernel, not to the search vector.
+
+    Use the ready-made ``corr_rq`` (alpha=1.0) or pick a tail, e.g.
+    ``RationalQuadratic(alpha=0.25)``. ``theta`` carries the length-scale(s) and may
+    be a scalar (isotropic) or a per-dimension vector (ARD), like the other kernels.
+
+    Parameters
+    ----------
+    alpha : float
+        Tail / scale-mixture parameter (> 0).
+    """
+
+    def __init__(self, alpha=1.0):
+        self.alpha = alpha
+
+    def __call__(self, D, theta):
+        # parameterized so alpha -> inf recovers corr_gauss exactly (no 1/2 factor,
+        # matching this library's gauss convention exp(-theta * D**2)).
+        base = 1 + theta * np.square(D) / self.alpha
+        return np.prod(base ** (-self.alpha), axis=1)
+
+    def grad(self, D, theta):
+        base = 1 + theta * np.square(D) / self.alpha
+        r = np.prod(base ** (-self.alpha), axis=1)
+        return -2 * theta * D / base * r[:, None]
+
+
+# ready-to-use default instance, drop-in like corr_gauss / corr_exp / ...
+corr_rq = RationalQuadratic()
+
+
 def index_except(n, indices):
     return [i for i in range(n) if i not in indices]
