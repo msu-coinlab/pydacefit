@@ -44,5 +44,35 @@ rastrigin 0.68 → 0.85, ackley 0.81 → 0.77. The multimodal functions stay nea
 1.0 for most configs — a Kriging surrogate from a modest uniform sample simply
 can't resolve their high-frequency structure.
 
+## More functions (re-implemented from pymoo)
+
+Added **griewank** (`[-600,600]`), **zakharov** (`[-10,10]`) and **schwefel**
+(`[-500,500]`) — re-implemented, not imported. Best config per function/dim:
+
+| count | config |
+|---|---|
+| 2× | `quadratic + expg` |
+| 1× each | `quadratic + spline`, `quadratic + lin`, `quadratic + gauss`, `constant + expg`, `linear + gauss`, `linear + exp`, `linear + expg` |
+
+These three sharpen the trend/landscape story:
+
+- **Griewank looks multimodal but is globally a bowl.** On `[-600,600]` the
+  `Σx²/4000` term dwarfs the `Πcos` ripples, so the **quadratic trend nearly
+  solves it** (NRMSE 0.017 → 0.0005 as d grows) for *any* kernel — same lesson as
+  sphere. With a constant trend, `expg`/`spline` lead.
+- **Zakharov is unimodal with variable coupling** → **quadratic** trend wins
+  (NRMSE ≈ 0.45–0.54), `gauss`/`expg` the best kernels.
+- **Schwefel is the cautionary tale.** It's deceptive (optimum near the boundary),
+  and here the **quadratic trend is actively harmful** — NRMSE *above 1.0*
+  (up to 1.55 at d=10), i.e. **worse than predicting the mean** — because it
+  extrapolates wildly. Constant/linear trends with `exp`/`expg` are least-bad
+  (~0.96). Nothing surrogates Schwefel well from a sparse uniform sample.
+
+**Bottom line across all 7 functions:** `expg` is the most reliable kernel, but
+the *regression trend* is the bigger lever — match it to the landscape: quadratic
+for globally-smooth/bowl-shaped (sphere, griewank, zakharov, low-d rosenbrock),
+constant/linear for multimodal/deceptive/high-dim (rastrigin, ackley, schwefel),
+where a polynomial trend can do real damage.
+
 > Numbers are from one fixed-seed run; treat them as a ranking, not gospel.
 > Re-run to explore other samples/dimensions.

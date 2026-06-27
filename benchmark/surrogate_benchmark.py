@@ -52,11 +52,33 @@ def ackley(X):
     return -20.0 * np.exp(-0.2 * np.sqrt(s1 / d)) - np.exp(s2 / d) + 20.0 + np.e
 
 
+# the next three are re-implemented from pymoo's single-objective suite
+
+
+def griewank(X):
+    i = np.arange(1, X.shape[1] + 1)
+    return 1.0 + np.sum(X**2, axis=1) / 4000.0 - np.prod(np.cos(X / np.sqrt(i)), axis=1)
+
+
+def zakharov(X):
+    i = np.arange(1, X.shape[1] + 1)
+    a = 0.5 * np.sum(i * X, axis=1)
+    return np.sum(X**2, axis=1) + a**2 + a**4
+
+
+def schwefel(X):
+    d = X.shape[1]
+    return 418.9829 * d - np.sum(X * np.sin(np.sqrt(np.abs(X))), axis=1)
+
+
 FUNCS = {
     "sphere": (sphere, -5.0, 5.0),
     "rosenbrock": (rosenbrock, -2.0, 2.0),
     "rastrigin": (rastrigin, -5.12, 5.12),
     "ackley": (ackley, -32.768, 32.768),
+    "griewank": (griewank, -600.0, 600.0),
+    "zakharov": (zakharov, -10.0, 10.0),
+    "schwefel": (schwefel, -500.0, 500.0),
 }
 
 REGR = {"constant": regr_constant, "linear": regr_linear, "quadratic": regr_quadratic}
