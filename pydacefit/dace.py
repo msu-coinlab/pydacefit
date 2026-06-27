@@ -1,17 +1,21 @@
-from pydacefit.boxmin import start, explore, move
-from pydacefit.corr import *
+"""DACE Kriging surrogate: fit, predict (with MSE/gradients), and theta optimization."""
+
+import numpy as np
+
+from pydacefit import corr as _corr
+from pydacefit import regr as _regr
+from pydacefit.boxmin import explore, move, start
+from pydacefit.corr import calc_grad, calc_kernel_matrix, corr_gauss
 from pydacefit.fit import fit
-from pydacefit.regr import *
+from pydacefit.regr import regr_constant
 
 
 class DACE:
-
     def __init__(self, regr=regr_constant, corr=corr_gauss, theta=1.0, thetaL=0.0, thetaU=100.0):
-        """
+        """Construct the model with the given regression and correlation types.
 
-        This is the main object of this framework. It can be initialized with different regression and correlation
-        types. Also, it can be defined if hyper parameter optimization should be used or not.
-
+        It can be initialized with different regression and correlation types, and
+        whether hyperparameter optimization is used is controlled by the theta bounds.
 
         Parameters
         ----------
@@ -29,9 +33,7 @@ class DACE:
 
         thetaU : float
             The upper bound if theta should be optimized.
-
         """
-
         super().__init__()
         self.regr = regr
         self.kernel = corr
@@ -43,8 +45,8 @@ class DACE:
         self.theta = theta
 
         # lower and upper bound if it should be optimized
-        self.tl = np.array(thetaL) if type(thetaL) == list else thetaL
-        self.tu = np.array(thetaU) if type(thetaU) == list else thetaU
+        self.tl = np.array(thetaL) if type(thetaL) is list else thetaL
+        self.tu = np.array(thetaU) if type(thetaU) is list else thetaU
 
         # intermediate steps saved during hyperparameter optimization
         self.itpar = None
@@ -69,21 +71,21 @@ class DACE:
 
         # check the hyperparamters
         if self.tl is not None and self.tu is not None:
-            self.model = {'nX': nX, 'nY': nY}
+            self.model = {"nX": nX, "nY": nY}
             self.boxmin()
             self.model = self.itpar["best"]
         else:
             self.model = fit(nX, nY, self.regr, self.kernel, self.theta)
 
-        self.model = {**self.model, 'mX': mX, 'sX': sX, 'mY': mY, 'sY': sY, 'nX': nX, 'nY': nY}
-        self.model['sigma2'] = np.square(sY) @ self.model['_sigma2']
+        self.model = {**self.model, "mX": mX, "sX": sX, "mY": mY, "sY": sY, "nX": nX, "nY": nY}
+        self.model["sigma2"] = np.square(sY) @ self.model["_sigma2"]
 
     def predict(self, _X, return_mse=False, return_gradient=False, return_mse_gradient=False):
 
-        mX, sX, nX = self.model['mX'], self.model['sX'], self.model['nX']
-        mY, sY = self.model['mY'], self.model['sY']
+        mX, sX, nX = self.model["mX"], self.model["sX"], self.model["nX"]
+        mY, sY = self.model["mY"], self.model["sY"]
         regr, corr, theta = self.regr, self.kernel, self.model["theta"]
-        beta, gamma = self.model['beta'], self.model['gamma']
+        beta, gamma = self.model["beta"], self.model["gamma"]
 
         # normalize the input given the mX and sX that was fitted before
         # NOTE: For the values to predict the _ is added to clarify its not the data fitted before
@@ -100,15 +102,13 @@ class DACE:
         ret = [_Y]
 
         if return_mse:
-
-            rt = np.linalg.lstsq(self.model['C'], _R.T, rcond=None)[0]
+            rt = np.linalg.lstsq(self.model["C"], _R.T, rcond=None)[0]
             u = (self.model["Ft"].T @ rt).T - _F
             v = u @ np.linalg.inv(self.model["G"])
-            mse = self.model["sigma2"] * (1 + np.sum(v ** 2, axis=1) - np.sum(rt ** 2, axis=0))
+            mse = self.model["sigma2"] * (1 + np.sum(v**2, axis=1) - np.sum(rt**2, axis=0))
             ret.append(mse[:, None])
 
         if return_gradient:
-
             # the final gradient matrix
             _grad = np.zeros(_X.shape)
 
@@ -123,7 +123,6 @@ class DACE:
             ret.append(_grad)
 
         if return_mse_gradient:
-
             if not return_mse or not return_gradient:
                 raise Exception("To evaluate the gradient of MSE, you must calculate the gradient and MSE as well.")
 
@@ -132,8 +131,7 @@ class DACE:
 
             # the gradient must be calculated for each point at once
             for i, _x in enumerate(_nX):
-
-                # is not implemented yet - here precision problems started to occur and results did not match
+                # not implemented yet - precision problems occurred and results did not match
                 _mse_grad[i] = np.nan
 
             ret.append(_mse_grad)
@@ -153,7 +151,6 @@ class DACE:
 
         # if the initial guess is feasible
         if not np.isinf(f):
-
             for k in range(kmax):
                 # save the last theta before exploring
                 last_t = itpar["best"]["theta"]
@@ -166,8 +163,10 @@ class DACE:
 
 
 def get_gradient_func(func):
-    try:
-
-        return globals()[func.__name__ + "_grad"]
-    except:
-        return None
+    # the analytic gradient lives alongside its function as `<name>_grad`
+    name = func.__name__ + "_grad"
+    for module in (_corr, _regr):
+        grad = getattr(module, name, None)
+        if grad is not None:
+            return grad
+    return None

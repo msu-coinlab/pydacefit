@@ -1,3 +1,5 @@
+"""Regression (trend) basis functions and gradients: constant, linear, quadratic."""
+
 import numpy as np
 
 

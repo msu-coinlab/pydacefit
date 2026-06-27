@@ -1,0 +1,30 @@
+# Starter pyproject.toml written by `pyclawd new --scaffold-pyproject`.
+# This is a STARTER config — curate it per the pyclawd-adopt skill.
+
+[tool.ruff]
+line-length = 120
+# docs/ is Sphinx build infrastructure (conf.py, build helpers) — not part of
+# the package or test surface, so keep it out of the quality gate.
+extend-exclude = ["docs"]
+
+[tool.ruff.lint]
+# One-line-per-file docstring doctrine: enable pydocstyle (D) but drop the
+# per-symbol mandates so only the module docstring is required, not every
+# class/method/function. Curate this select set per the pyclawd-adopt skill.
+select = ["E", "F", "I", "D"]
+ignore = ["D101", "D102", "D103", "D105", "D107"]
+
+[tool.ruff.lint.pydocstyle]
+# The repo's existing docstrings (e.g. the DACE class) are numpy-style.
+convention = "numpy"
+
+[tool.mypy]
+files = ["pydacefit"]
+explicit_package_bases = true
+
+[tool.pytest.ini_options]
+markers = [
+    "slow: long-running tests (excluded from the default tier)",
+    "integration: tests needing live services",
+    "golden: behavior-oracle snapshots (run via `pyclawd golden`)",
+]

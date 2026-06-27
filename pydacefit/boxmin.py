@@ -1,13 +1,17 @@
+"""Box-min hyperparameter search (Hooke & Jeeves pattern moves) over theta."""
+
 import numpy as np
 
 from pydacefit.fit import fit
 
 
 def start(theta, dace):
-    t, lo, up = theta, dace.tl, dace.tu
+    # copy so the in-place fixes below (t[ee], t[ng]) don't mutate the caller's theta
+    t = np.copy(theta) if isinstance(theta, np.ndarray) else theta
+    lo, up = dace.tl, dace.tu
 
     # check whether theta is a vector or not
-    if type(dace.tu) != np.ndarray:
+    if type(dace.tu) is not np.ndarray:
         p = 1
     else:
         p = len(dace.tu)
@@ -15,13 +19,14 @@ def start(theta, dace):
     D = np.power(2, np.arange(1, p + 1).T / (p + 2))
 
     # if the equality constraint is equal then no search necessary
-    ee = np.where(lo == up)[0]
+    # (atleast_1d so scalar theta bounds still produce a 1d index array)
+    ee = np.atleast_1d(lo == up).nonzero()[0]
     if len(ee) > 0:
         D[ee] = 1
         t[ee] = up[ee]
 
     # if theta is not in bounds - bring it in bounds
-    ng = np.where(np.logical_or(t < lo, up < t))[0]
+    ng = np.atleast_1d(np.logical_or(t < lo, up < t)).nonzero()[0]
     if len(ng) > 0:
         t[ng] = np.power(lo[ng] * np.power(up[ng], 7), (1 / 8))
 
@@ -36,15 +41,7 @@ def start(theta, dace):
     if type(up) is not np.ndarray:
         up = np.array([up])
 
-    itpar = {
-        'best': model,
-        'models': [model],
-        'D': D,
-        'ne': ne,
-        'lo': lo,
-        'up': up,
-        'p': len(lo)
-    }
+    itpar = {"best": model, "models": [model], "D": D, "ne": ne, "lo": lo, "up": up, "p": len(lo)}
 
     # try to improve starting guess if out of bounds
     if len(ng) > 0:
@@ -60,11 +57,8 @@ def evaluate_and_set_best(tt, dace, itpar):
         model = fit(dace.model["nX"], dace.model["nY"], dace.regr, dace.kernel, tt)
         itpar["models"].append(model)
 
-    except:
-        itpar["models"].append({
-            "theta": tt,
-            "obj": np.inf
-        })
+    except Exception:
+        itpar["models"].append({"theta": tt, "obj": np.inf})
         return False
 
     # flag the model as best if it is
@@ -80,7 +74,6 @@ def explore(dace, itpar):
     ne, D, lo, up = itpar["ne"], itpar["D"], itpar["lo"], itpar["up"]
 
     for k in range(len(ne)):
-
         j = ne[k]
 
         # theta of the current best model
@@ -103,7 +96,6 @@ def explore(dace, itpar):
 
         # if not improvement then decrease theta
         if not has_improved:
-
             # if the bounds were not reached
             if t[j] != up[j] and t[j] != lo[j]:
                 tt = np.copy(t)
@@ -113,17 +105,17 @@ def explore(dace, itpar):
 
 
 def move(th, dace, itpar):
-    p, ne, D, lo, up = itpar["p"], itpar["ne"], itpar["D"], itpar["lo"], itpar["up"]
+    p, lo, up = itpar["p"], itpar["lo"], itpar["up"]
 
     # index used later on for permutation
-    I = np.concatenate([np.arange(1, p), [0]])
+    perm = np.concatenate([np.arange(1, p), [0]])
 
     t = itpar["best"]["theta"]
     v = t / th
 
     # if t and th is all equal
     if np.all(v == 1):
-        itpar["D"] = np.power(itpar["D"][I], 0.2)
+        itpar["D"] = np.power(itpar["D"][perm], 0.2)
         return
 
     cont = True
@@ -148,4 +140,4 @@ def move(th, dace, itpar):
         if np.any(np.logical_or(tt == lo, tt == up)):
             cont = False
 
-    itpar["D"] = np.power(itpar["D"][I], 0.25)
+    itpar["D"] = np.power(itpar["D"][perm], 0.25)

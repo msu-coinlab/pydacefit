@@ -1,4 +1,6 @@
-import autograd.numpy as np
+"""Correlation (kernel) functions and their gradients for the DACE model."""
+
+import numpy as np
 
 
 # function to calculate the correlation matrix all in one
@@ -17,6 +19,7 @@ def calc_grad(A, B, func, theta):
 # Correlation Functions
 # -------------------------------
 
+
 def corr_gauss(D, theta):
     return np.exp(np.sum(np.square(D) * -theta, axis=1))
 
@@ -27,7 +30,7 @@ def corr_gauss_grad(D, theta):
 
 def corr_cubic(D, theta):
     td = np.minimum(np.abs(D) * theta, 1)
-    ss = 1 - td ** 2 * (3 - 2 * td)
+    ss = 1 - td**2 * (3 - 2 * td)
     r = np.prod(ss, axis=1)
     return r
 
@@ -35,11 +38,11 @@ def corr_cubic(D, theta):
 def corr_cubic_grad(D, theta):
     dr = np.zeros(D.shape)
     td = np.minimum(np.abs(D) * theta, 1)
-    ss = 1 - td ** 2 * (3 - 2 * td)
+    ss = 1 - td**2 * (3 - 2 * td)
 
     for j in range(D.shape[1]):
         _b = index_except(D.shape[1], [j])
-        _theta = theta[j] if type(theta) == np.ndarray and len(theta) == D.shape[1] else theta
+        _theta = theta[j] if type(theta) is np.ndarray and len(theta) == D.shape[1] else theta
         dd = 6 * _theta * np.sign(D[:, j]) * td[:, j] * (td[:, j] - 1)
 
         dr[:, j] = np.prod(ss[:, _b], axis=1) * dd
@@ -51,7 +54,7 @@ def corr_exp(D, theta):
 
 
 def corr_exp_grad(D, theta):
-    return - theta * np.sign(D) * corr_exp(D, theta)[:, None]
+    return -theta * np.sign(D) * corr_exp(D, theta)[:, None]
 
 
 def corr_lin(D, theta):
@@ -64,7 +67,7 @@ def corr_lin_grad(D, theta):
 
     for j in range(D.shape[1]):
         _b = index_except(D.shape[1], [j])
-        _theta = theta[j] if type(theta) == np.ndarray and len(theta) == D.shape[1] else theta
+        _theta = theta[j] if type(theta) is np.ndarray and len(theta) == D.shape[1] else theta
         dr[:, j] = np.prod(td[:, _b], axis=1) * -_theta * np.sign(D[:, j])
     return dr
 
@@ -82,7 +85,7 @@ def corr_spherical_grad(D, theta):
     ss = 1 - td * (1.5 - 0.5 * np.power(td, 2))
 
     for j in range(D.shape[1]):
-        _theta = theta[j] if type(theta) == np.ndarray and len(theta) == D.shape[1] else theta
+        _theta = theta[j] if type(theta) is np.ndarray and len(theta) == D.shape[1] else theta
         dd = 1.5 * _theta * np.sign(D[:, j]) * (td[:, j] ** 2 - 1)
         _b = index_except(D.shape[1], [j])
         dr[:, j] = np.prod(ss[:, _b], axis=1) * dd
@@ -93,13 +96,13 @@ def corr_spline(D, theta):
     ss = np.zeros(D.shape)
     xi = np.abs(D) * theta
 
-    I = np.where(xi <= 0.2)
-    if len(I) > 0:
-        ss[I] = 1 - xi[I] ** 2 * (15 - 30 * xi[I])
+    sel = np.where(xi <= 0.2)
+    if len(sel) > 0:
+        ss[sel] = 1 - xi[sel] ** 2 * (15 - 30 * xi[sel])
 
-    I = np.where(np.logical_and(xi > 0.2, xi < 1.0))
-    if len(I) > 0:
-        ss[I] = 1.25 * (1 - xi[I]) ** 3
+    sel = np.where(np.logical_and(xi > 0.2, xi < 1.0))
+    if len(sel) > 0:
+        ss[sel] = 1.25 * (1 - xi[sel]) ** 3
 
     r = np.prod(ss, axis=1)
     return r
@@ -108,23 +111,23 @@ def corr_spline(D, theta):
 def corr_spline_grad(D, theta):
     ss = np.zeros(D.shape)
     xi = np.abs(D) * theta
-    I = np.where(xi <= 0.2)
-    if len(I) > 0:
-        ss[I] = 1 - xi[I] ** 2 * (15 - 30 * xi[I])
-    I = np.where(np.logical_and(xi > 0.2, xi < 1.0))
-    if len(I) > 0:
-        ss[I] = 1.25 * (1 - xi[I]) ** 3
+    sel = np.where(xi <= 0.2)
+    if len(sel) > 0:
+        ss[sel] = 1 - xi[sel] ** 2 * (15 - 30 * xi[sel])
+    sel = np.where(np.logical_and(xi > 0.2, xi < 1.0))
+    if len(sel) > 0:
+        ss[sel] = 1.25 * (1 - xi[sel]) ** 3
 
     dr = np.zeros(D.shape)
     m, n = D.shape
     u = np.sign(D) * theta
 
-    I = np.where(u <= 0.2)
-    if len(I) > 0:
-        dr[I] = u[I] * ((90 * xi[I] - 30) * xi[I])
-    I = np.where(np.logical_and(xi > 0.2, xi < 1.0))
-    if len(I) > 0:
-        dr[I] = -3.75 * u[I] * (1 - xi[I] ** 2)
+    sel = np.where(u <= 0.2)
+    if len(sel) > 0:
+        dr[sel] = u[sel] * ((90 * xi[sel] - 30) * xi[sel])
+    sel = np.where(np.logical_and(xi > 0.2, xi < 1.0))
+    if len(sel) > 0:
+        dr[sel] = -3.75 * u[sel] * (1 - xi[sel] ** 2)
 
     for j in range(n):
         _ss = np.copy(ss)

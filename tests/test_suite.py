@@ -1,3 +1,5 @@
+"""Manual runner that aggregates the correctness and usage tests into one suite."""
+
 import os
 import sys
 import unittest
@@ -6,8 +8,8 @@ import unittest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
 
 testmodules = [
-    'tests.test_correctness',
-    'tests.test_usage',
+    "tests.test_correctness",
+    "tests.test_usage",
 ]
 
 suite = unittest.TestSuite()
