@@ -1,12 +1,40 @@
-"""Box-min hyperparameter search (Hooke & Jeeves pattern moves) over theta."""
+"""Box-min optimizer: Hooke & Jeeves pattern search over theta (the original DACE method)."""
 
 import numpy as np
 
 from pydacefit.fit import fit
+from pydacefit.optimizers.base import Optimizer, fit_feasible
 
 
-def start(theta, dace):
+class Boxmin(Optimizer):
+    """Hooke & Jeeves pattern search -- the original DACE theta optimizer.
+
+    Derivative-free and robust; it explores broadly from the start theta, which makes
+    it the right default for a cold initial fit. ``optimize`` returns the best model
+    and the full search trajectory (``itpar``).
+    """
+
+    def optimize(self, dace):
+        """Run the pattern search; return ``(best_model, itpar)``."""
+        itpar = _start(dace)
+        model = itpar["models"][-1]
+        p, f = itpar["p"], model["f"]
+
+        kmax = 2 if p <= 2 else min(p, 4)
+
+        # if the initial guess is feasible, run the pattern moves
+        if not np.isinf(f):
+            for _ in range(kmax):
+                last_t = itpar["best"]["theta"]
+                _explore(dace, itpar)
+                _move(last_t, dace, itpar)
+
+        return itpar["best"], itpar
+
+
+def _start(dace):
     # copy so the in-place fixes below (t[ee], t[ng]) don't mutate the caller's theta
+    theta = dace.theta
     t = np.copy(theta) if isinstance(theta, np.ndarray) else theta
     lo, up = dace.tl, dace.tu
 
@@ -32,8 +60,9 @@ def start(theta, dace):
 
     ne = np.where(D != 1)[0]
 
-    X, Y = dace.model["nX"], dace.model["nY"]
-    model = fit(X, Y, dace.regr, dace.kernel, t)
+    # fit at t; if it sits in a non-positive-definite pocket, relocate to a feasible
+    # theta (toward thetaU) instead of crashing the Cholesky inside fit()
+    t, model = fit_feasible(dace, t, relocate=True)
 
     if type(lo) is not np.ndarray:
         lo = np.array([lo])
@@ -50,9 +79,8 @@ def start(theta, dace):
     return itpar
 
 
-def evaluate_and_set_best(tt, dace, itpar):
-
-    # evaluate the model and append
+def _evaluate_and_set_best(tt, dace, itpar):
+    # evaluate the model and append; a non-PD theta is infeasible -> infinite objective
     try:
         model = fit(dace.model["nX"], dace.model["nY"], dace.regr, dace.kernel, tt)
         itpar["models"].append(model)
@@ -70,7 +98,7 @@ def evaluate_and_set_best(tt, dace, itpar):
         return False
 
 
-def explore(dace, itpar):
+def _explore(dace, itpar):
     ne, D, lo, up = itpar["ne"], itpar["D"], itpar["lo"], itpar["up"]
 
     for k in range(len(ne)):
@@ -92,7 +120,7 @@ def explore(dace, itpar):
             tt[j] = min(up[j], t[j] * DD)
 
         # first try to increase theta
-        has_improved = evaluate_and_set_best(tt, dace, itpar)
+        has_improved = _evaluate_and_set_best(tt, dace, itpar)
 
         # if not improvement then decrease theta
         if not has_improved:
@@ -101,10 +129,10 @@ def explore(dace, itpar):
                 tt = np.copy(t)
                 tt[j] = max(lo[j], t[j] / DD)
 
-                evaluate_and_set_best(tt, dace, itpar)
+                _evaluate_and_set_best(tt, dace, itpar)
 
 
-def move(th, dace, itpar):
+def _move(th, dace, itpar):
     p, lo, up = itpar["p"], itpar["lo"], itpar["up"]
 
     # index used later on for permutation
@@ -127,7 +155,7 @@ def move(th, dace, itpar):
         tt[tt > up] = up[tt > up]
         tt[tt < lo] = lo[tt < lo]
 
-        has_improved = evaluate_and_set_best(tt, dace, itpar)
+        has_improved = _evaluate_and_set_best(tt, dace, itpar)
 
         # if it has improved we increment the step size
         if has_improved:

@@ -4,14 +4,23 @@ import numpy as np
 
 from pydacefit import corr as _corr
 from pydacefit import regr as _regr
-from pydacefit.boxmin import explore, move, start
 from pydacefit.corr import calc_grad, calc_kernel_matrix, corr_gauss
 from pydacefit.fit import fit
+from pydacefit.optimizers import Boxmin
 from pydacefit.regr import regr_constant
 
 
 class DACE:
-    def __init__(self, regr=regr_constant, corr=corr_gauss, theta=1.0, thetaL=0.0, thetaU=100.0):
+    def __init__(
+        self,
+        regr=regr_constant,
+        corr=corr_gauss,
+        theta=1.0,
+        thetaL=0.0,
+        thetaU=100.0,
+        optimizer=None,
+        raise_error=True,
+    ):
         """Construct the model with the given regression and correlation types.
 
         It can be initialized with different regression and correlation types, and
@@ -33,6 +42,16 @@ class DACE:
 
         thetaU : float
             The upper bound if theta should be optimized.
+
+        optimizer : Optimizer, optional
+            Strategy used to optimize theta when bounds are given (an instance of
+            pydacefit.optimizers.Optimizer). Defaults to Boxmin() (pattern search);
+            LBFGS() and Fixed() are the other built-ins.
+
+        raise_error : bool
+            What to do when no theta in [thetaL, thetaU] yields a positive-definite
+            correlation matrix. True (default) raises; False falls back to a
+            regularized model at the geometric-midpoint theta (with a warning).
         """
         super().__init__()
         self.regr = regr
@@ -41,12 +60,19 @@ class DACE:
         # most of the model will be stored here
         self.model = None
 
-        # the hyperparameter can be defined
-        self.theta = theta
+        # the hyperparameter can be defined (coerce a list like the bounds below, so
+        # a vector theta reaches the kernel as an array and not a Python list)
+        self.theta = np.array(theta) if type(theta) is list else theta
 
         # lower and upper bound if it should be optimized
         self.tl = np.array(thetaL) if type(thetaL) is list else thetaL
         self.tu = np.array(thetaU) if type(thetaU) is list else thetaU
+
+        # strategy that optimizes theta within the bounds (see pydacefit.optimizers)
+        self.optimizer = optimizer if optimizer is not None else Boxmin()
+
+        # whether to raise (vs. fall back to a regularized model) when no theta is feasible
+        self.raise_error = raise_error
 
         # intermediate steps saved during hyperparameter optimization
         self.itpar = None
@@ -72,13 +98,64 @@ class DACE:
         # check the hyperparamters
         if self.tl is not None and self.tu is not None:
             self.model = {"nX": nX, "nY": nY}
-            self.boxmin()
-            self.model = self.itpar["best"]
+            self.model, self.itpar = self.optimizer.optimize(self)
         else:
             self.model = fit(nX, nY, self.regr, self.kernel, self.theta)
+            self.itpar = None
 
-        self.model = {**self.model, "mX": mX, "sX": sX, "mY": mY, "sY": sY, "nX": nX, "nY": nY}
+        # keep the raw (destandardized) training data so refit() can append to it
+        self.model = {**self.model, "X": X, "Y": Y, "mX": mX, "sX": sX, "mY": mY, "sY": sY, "nX": nX, "nY": nY}
         self.model["sigma2"] = np.square(sY) @ self.model["_sigma2"]
+
+    def refit(self, X, Y, optimizer=None):
+        """Append new observations to the training data and re-fit, warm-started.
+
+        Takes only the *new* points, appends them to the data the model was last
+        fit on, and re-fits on the combined set. Theta is seeded from the previous
+        fit (warm start), so the search begins next to the optimum instead of at
+        the original initial guess -- the optimum barely moves when a few points
+        are added, which is exactly when a local optimizer shines.
+
+        Parameters
+        ----------
+        X : numpy.ndarray
+            The new input points to add (only the additions, not the full set).
+
+        Y : numpy.ndarray
+            The target values corresponding to the new points ``X``.
+
+        optimizer : Optimizer, optional
+            Strategy to use for this refit only. ``None`` (default) inherits the
+            model's configured optimizer. Pass ``LBFGS()`` for a fast local refine,
+            or ``Fixed()`` to freeze theta and just re-solve. Has no effect when the
+            model was built without theta bounds. Requires a prior successful ``fit``.
+
+        Raises
+        ------
+        Exception
+            If called before any successful ``fit``.
+        """
+        if self.model is None:
+            raise Exception("refit() requires a prior fit(); call fit() first.")
+
+        # match fit's reshape so a 1d Y appends cleanly onto the stored 2d targets
+        if len(Y.shape) == 1:
+            Y = Y[:, None]
+
+        # append the new observations to the data the model was last fit on
+        X = np.vstack([self.model["X"], X])
+        Y = np.vstack([self.model["Y"], Y])
+
+        # warm start: seed the search with the previously optimized theta
+        self.theta = self.model["theta"]
+
+        # optional per-refit optimizer override, restored afterwards
+        configured = self.optimizer
+        self.optimizer = optimizer or configured
+        try:
+            self.fit(X, Y)
+        finally:
+            self.optimizer = configured
 
     def predict(self, _X, return_mse=False, return_gradient=False, return_mse_gradient=False):
 
@@ -140,26 +217,6 @@ class DACE:
             return ret[0]
         else:
             return tuple(ret)
-
-    def boxmin(self):
-
-        itpar = start(self.theta, self)
-        model = itpar["models"][-1]
-        p, f = itpar["p"], model["f"]
-
-        kmax = 2 if p <= 2 else min(p, 4)
-
-        # if the initial guess is feasible
-        if not np.isinf(f):
-            for k in range(kmax):
-                # save the last theta before exploring
-                last_t = itpar["best"]["theta"]
-
-                # do the actual explore step
-                explore(self, itpar)
-                move(last_t, self, itpar)
-
-        self.itpar = itpar
 
 
 def get_gradient_func(func):

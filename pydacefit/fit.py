@@ -6,14 +6,17 @@ from numpy.linalg import LinAlgError
 from pydacefit.corr import calc_kernel_matrix
 
 
-def fit(X, Y, regr, kernel, theta):
+def fit(X, Y, regr, kernel, theta, nugget=0.0):
 
     # number of sample points (rows of the design matrix)
     n_sample = X.shape[0]
 
-    # calculate the kernel matrix R
+    # calculate the kernel matrix R. The baseline term is float-level jitter against
+    # near-singularity; `nugget` is an optional extra regularization used only as a
+    # last-resort fallback when no positive-definite theta exists (see
+    # pydacefit.optimizers.fit_feasible).
     R = calc_kernel_matrix(X, X, kernel, theta)
-    R += np.eye(n_sample) * (10 + n_sample) * 2.220446049250313e-16
+    R += np.eye(n_sample) * ((10 + n_sample) * 2.220446049250313e-16 + nugget)
 
     # do the cholesky decomposition
     try:

@@ -23,7 +23,7 @@ setup(
     url=__url__,
     license="Apache License 2.0",
     keywords="metamodel, surrogate, response surface",
-    install_requires=["numpy"],
+    install_requires=["numpy", "scipy"],
     # matplotlib is only needed to run the plotting example (pydacefit/usage.py).
     extras_require={"examples": ["matplotlib"]},
     packages=find_packages(exclude=["tests", "docs"]),

@@ -28,6 +28,17 @@ def corr_gauss_grad(D, theta):
     return -2 * theta * D * corr_gauss(D, theta)[:, None]
 
 
+def corr_gauss_theta_grad(D, theta):
+    # derivative of each pair's correlation w.r.t. theta: d/d(theta_k) exp(-sum_k theta_k d_k^2).
+    # ARD (vector theta): one column per input dim, d/d(theta_k) = -d_k^2 * corr -> (n_pairs, p).
+    # isotropic (scalar/length-1 theta): a single theta scales every dim, so sum over dims -> (n_pairs, 1).
+    base = corr_gauss(D, theta)[:, None]
+    sq = np.square(D)
+    if np.size(theta) == 1:
+        return -np.sum(sq, axis=1, keepdims=True) * base
+    return -sq * base
+
+
 def corr_cubic(D, theta):
     td = np.minimum(np.abs(D) * theta, 1)
     ss = 1 - td**2 * (3 - 2 * td)
