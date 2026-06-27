@@ -15,8 +15,25 @@ class Optimizer(ABC):
     ``DACE.fit`` through ``optimize``. Subclasses implement the search and return the
     chosen model together with an optional trajectory for inspection. Implementations
     should obtain their fits through ``fit_feasible`` so they all honor the model's
-    ``raise_error`` policy consistently.
+    ``raise_error`` policy consistently, and pick their final model through
+    ``_select`` so validation-based selection works uniformly across strategies.
     """
+
+    def __init__(self, validation=None):
+        """Store the optional held-out validation set used to select theta.
+
+        Parameters
+        ----------
+        validation : tuple or None
+            Either None (select theta by maximum likelihood -- the default) or a
+            raw ``(X_val, Y_val)`` tuple in the same units as the training data.
+            When given, theta is chosen to minimize prediction error on this set
+            instead of the likelihood: the search is still MLE-driven, but the
+            final pick among the visited thetas is the one with the lowest
+            held-out error. The set is scored in original Y space by
+            ``DACE._val_error``, so normalization stays inside the model.
+        """
+        self.validation = validation
 
     @abstractmethod
     def optimize(self, dace):
@@ -35,6 +52,37 @@ class Optimizer(ABC):
             ``(model, itpar)`` -- the chosen fit() result and a search trajectory
             (a dict for Boxmin, or None when there is none).
         """
+
+    def _select(self, dace, candidates):
+        """Pick the best feasible candidate fit from a search trajectory.
+
+        With no validation set this is the maximum-likelihood choice -- the lowest
+        objective ``f``, identical to the historical behavior. With a validation
+        set it is the candidate with the lowest held-out RMSE: MLE drives the
+        search, the validation set makes the final pick. Infeasible placeholders
+        (which carry no built model) are skipped.
+
+        Parameters
+        ----------
+        dace : DACE
+            The model being fit; provides normalization-aware scoring through
+            ``_val_error`` and the training standardization.
+
+        candidates : list of dict
+            The fit() results visited during the search.
+
+        Returns
+        -------
+        dict
+            The selected fit() result.
+        """
+        feasible = [m for m in candidates if "gamma" in m]
+        if not feasible:
+            return candidates[-1]
+        if self.validation is None:
+            return min(feasible, key=lambda m: m["f"])
+        Xv, Yv = self.validation
+        return min(feasible, key=lambda m: dace._val_error(m, Xv, Yv))
 
 
 def fit_feasible(dace, theta, relocate=True):

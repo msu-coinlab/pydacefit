@@ -117,9 +117,19 @@ class LBFGS(Optimizer):
 
     random_state : int or None
         Seed for the restart sampling, so multi-start fits are reproducible.
+
+    validation : tuple or None
+        Optional ``(X_val, Y_val)`` held-out set (see ``Optimizer``). When given,
+        theta is chosen by ranking the *entire* search history -- every theta the
+        gradient search evaluates is recorded (at no extra cost, since the objective
+        already fits a model there) and the one with the lowest held-out error is
+        kept. So selection is meaningful even with ``n_restarts=0``, where a single
+        descent still visits many thetas. The MLE path is unaffected: with no
+        validation set the best per-restart optimum is returned, exactly as before.
     """
 
-    def __init__(self, gtol=1e-3, ftol=1e-6, n_restarts=0, random_state=0):
+    def __init__(self, gtol=1e-3, ftol=1e-6, n_restarts=0, random_state=0, validation=None):
+        super().__init__(validation=validation)
         self.gtol = gtol
         self.ftol = ftol
         self.n_restarts = n_restarts
@@ -139,6 +149,13 @@ class LBFGS(Optimizer):
         theta0 = np.clip(theta0, lo, up)
         bounds = list(zip(lo, up))
 
+        # for validation selection we rank every theta the search visits, so record
+        # each evaluated feasible model. fun already fits at every theta -- recording
+        # is just keeping that model instead of discarding it (zero extra fits). For
+        # the MLE path we never look at the history, so don't pay the memory.
+        record = self.validation is not None
+        history = []
+
         # objective (+ analytic gradient when the kernel provides one)
         if grad_func is not None:
 
@@ -148,6 +165,8 @@ class LBFGS(Optimizer):
                     model = fit(nX, nY, regr, kernel, t)
                 except Exception:
                     return _INFEASIBLE, np.zeros_like(t)
+                if record:
+                    history.append(model)
                 return float(model["f"]), objective_gradient(nX, model, t, grad_func)
 
             jac = True
@@ -155,9 +174,12 @@ class LBFGS(Optimizer):
 
             def fun(t):
                 try:
-                    return float(fit(nX, nY, regr, kernel, np.array(t, dtype=float))["f"])
+                    model = fit(nX, nY, regr, kernel, np.array(t, dtype=float))
                 except Exception:
                     return _INFEASIBLE
+                if record:
+                    history.append(model)
+                return float(model["f"])
 
             jac = False
 
@@ -168,13 +190,19 @@ class LBFGS(Optimizer):
             for _ in range(self.n_restarts):
                 starts.append(10.0 ** rng.uniform(np.log10(lo), np.log10(up)))
 
-        # keep the lowest-objective optimum across all starts
-        best = None
+        # build a model at each restart's converged theta (fit_feasible also applies
+        # the shared feasibility / raise_error safety net). For n_restarts=0 this is a
+        # single start, as before.
+        optima = []
         for s in starts:
             res = minimize(fun, s, method="L-BFGS-B", jac=jac, bounds=bounds, options=options)
-            if best is None or res.fun < best.fun:
-                best = res
+            _, model = fit_feasible(dace, np.atleast_1d(res.x), relocate=True)
+            optima.append(model)
+            if record:
+                history.append(model)
 
-        # build the final model with the shared feasibility / raise_error safety net
-        _, model = fit_feasible(dace, np.atleast_1d(best.x), relocate=True)
-        return model, None
+        # MLE selects the best converged optimum -- unchanged behavior. Validation
+        # ranks the FULL recorded search history, so it chooses among every theta the
+        # gradient search visited (like Boxmin), not just the per-restart optima --
+        # which means selection is meaningful even when n_restarts=0.
+        return self._select(dace, history if record else optima), None

@@ -29,6 +29,12 @@ class Boxmin(Optimizer):
                 _explore(dace, itpar)
                 _move(last_t, dace, itpar)
 
+        # the pattern search above is MLE-driven (itpar["best"] tracks the lowest
+        # objective). The final pick re-ranks every feasible theta the search
+        # visited: with no validation set this returns that same MLE optimum, so
+        # behavior is unchanged; with one it returns the best on the held-out set.
+        itpar["best"] = self._select(dace, itpar["models"])
+
         return itpar["best"], itpar
 
 

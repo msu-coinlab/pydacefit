@@ -95,9 +95,15 @@ class DACE:
         nX = (X - mX) / sX
         nY = (Y - mY) / sY
 
+        # standardization stats go on the model BEFORE optimize so an optimizer that
+        # selects theta on a validation set can score candidates in original Y space
+        # via _val_error (normalization stays the model's responsibility, not the
+        # optimizer's). They are re-attached after the fit below; this is harmless.
+        stats = {"mX": mX, "sX": sX, "mY": mY, "sY": sY}
+
         # check the hyperparamters
         if self.tl is not None and self.tu is not None:
-            self.model = {"nX": nX, "nY": nY}
+            self.model = {"nX": nX, "nY": nY, **stats}
             self.model, self.itpar = self.optimizer.optimize(self)
         else:
             self.model = fit(nX, nY, self.regr, self.kernel, self.theta)
@@ -156,6 +162,46 @@ class DACE:
             self.fit(X, Y)
         finally:
             self.optimizer = configured
+
+    def _val_error(self, model, Xv, Yv):
+        """Root-mean-square error of a candidate fit on a held-out validation set.
+
+        Used by an optimizer to select theta when a validation set is configured.
+        The candidate is predicted with its own theta and brought back to the
+        original Y space using the training standardization stored on
+        ``self.model`` -- so the error is measured in the same units the user sees
+        from ``predict``, and the raw ``Yv`` is never standardized (no leakage).
+
+        Parameters
+        ----------
+        model : dict
+            A fit() result (carries beta, gamma, theta, kernel, regr).
+
+        Xv : numpy.ndarray
+            Validation inputs, raw (unstandardized), shape ``(m, d)``.
+
+        Yv : numpy.ndarray
+            Validation targets, raw, shape ``(m,)`` or ``(m, k)``.
+
+        Returns
+        -------
+        float
+            The RMSE in original Y units.
+        """
+        mX, sX, nX = self.model["mX"], self.model["sX"], self.model["nX"]
+        mY, sY = self.model["mY"], self.model["sY"]
+
+        # standardize the inputs with the TRAINING stats, exactly as predict does
+        _nXv = (Xv - mX) / sX
+        _F = model["regr"](_nXv)
+        _R = calc_kernel_matrix(_nXv, nX, model["kernel"], model["theta"])
+
+        # predict, then destandardize back to original Y units to compare to raw Yv
+        _sYhat = _F @ model["beta"] + (model["gamma"].T @ _R.T).T
+        Yhat = _sYhat * sY + mY
+
+        Yv = Yv[:, None] if Yv.ndim == 1 else Yv
+        return float(np.sqrt(np.mean(np.square(Yhat - Yv))))
 
     def predict(self, _X, return_mse=False, return_gradient=False, return_mse_gradient=False):
 
