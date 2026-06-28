@@ -39,8 +39,9 @@ select = ["E", "F", "I", "D"]
 ignore = ["D101", "D102", "D103", "D105", "D107"]
 
 [tool.ruff.lint.pydocstyle]
-# The repo's existing docstrings (e.g. the DACE class) are numpy-style.
-convention = "numpy"
+# Google-style docstrings (Args:/Returns:/Raises:), no types in the docstring -- the
+# type annotations carry them. This is the project-wide convention.
+convention = "google"
 
 [tool.mypy]
 files = ["src/pydacefit"]

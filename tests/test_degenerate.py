@@ -12,6 +12,7 @@ import pytest
 
 from pydacefit.corr import Gaussian
 from pydacefit.dace import DACE
+from pydacefit.fit import DaceFitError
 from pydacefit.regr import ConstantRegression, QuadraticRegression
 
 
@@ -80,12 +81,15 @@ def _case_duplicate_points():
     return model, np.linspace(0, 1, 4)[:, None]
 
 
-def _case_collinear_quadratic():
+def test_collinear_quadratic_design_raises():
+    # both input columns are identical, so the quadratic basis has duplicate columns
+    # (rank 3 of 6) -- a genuinely singular regression design. There is no meaningful
+    # GLS fit, so fit() must raise (matching MATLAB DACE's rcond(G) guard) rather than
+    # silently return finite-but-garbage predictions.
     X = np.linspace(0, 1, 12)[:, None] * np.ones((1, 2))
     y = np.sin(X[:, 0] * 6.0)
-    model = _model(regr=QuadraticRegression())
-    model.fit(X, y)
-    return model, np.linspace(0, 1, 4)[:, None] * np.ones((1, 2))
+    with pytest.raises(DaceFitError, match="too ill conditioned"):
+        _model(regr=QuadraticRegression()).fit(X, y)
 
 
 def _case_tiny_theta():
@@ -97,8 +101,8 @@ def _case_tiny_theta():
 
 @pytest.mark.parametrize(
     "build",
-    [_case_duplicate_points, _case_collinear_quadratic, _case_tiny_theta],
-    ids=["duplicate_points", "collinear_quadratic", "tiny_theta"],
+    [_case_duplicate_points, _case_tiny_theta],
+    ids=["duplicate_points", "tiny_theta"],
 )
 def test_ill_conditioned_returns_finite(build):
     model, x_test = build()

@@ -36,7 +36,8 @@ def fit(X, Y, regr, kernel, theta, noise=0.0, max_noise=0.0):
     # much deliberate noise was set -- until R factorizes. max_noise=0 permits no repair,
     # so a non-PD R raises and the optimizers read that as an infeasible theta. If even
     # max_noise cannot make R PD, we stop and raise. The recorded model["noise"] is the
-    # total effective diagonal (deliberate + repair).
+    # deliberate noise + repair (the always-on `base` machine-eps jitter is excluded as a
+    # negligible numerical floor, not a modeling term).
     repair = 0.0
     while True:
         R = R0 + np.eye(n_sample) * (base + noise + repair)
@@ -62,8 +63,11 @@ def fit(X, Y, regr, kernel, theta, noise=0.0, max_noise=0.0):
     F = regr(X)
     Ft = np.linalg.lstsq(C, F, rcond=None)[0]
     Q, G = np.linalg.qr(Ft)
+    # rcond is the reciprocal condition number of G (small => ill-conditioned). Guard
+    # fires when G is near-singular, i.e. the regression basis is degenerate on these
+    # sites; otherwise the bad G would silently corrupt beta and the predictive variance.
     rcond = 1.0 / np.linalg.cond(G)
-    if rcond > 1e15:
+    if rcond < 1e-15:
         raise DaceFitError("F is too ill conditioned: Poor combination of regression model and design sites")
     Yt = np.linalg.solve(C, Y)
     beta = np.linalg.lstsq(G, Q.T @ Yt, rcond=None)[0]

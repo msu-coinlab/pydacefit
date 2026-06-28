@@ -19,23 +19,13 @@ def objective_gradient(nX, model, theta, grad_func):
     and ``Rk = dR/d(theta_k)`` comes from ``grad_func``. The cross term in dsigma2
     vanishes by the optimality of the GLS coefficients (envelope theorem).
 
-    Parameters
-    ----------
-    nX : numpy.ndarray
-        The standardized design sites the model was fit on.
+    Args:
+        nX: The standardized design sites the model was fit on.
+        model: A fit() result (provides R, C, gamma and the per-output sigma2).
+        theta: The theta at which the model was fit.
+        grad_func: Kernel theta-derivative: ``(D, theta) -> (n_pairs, p)`` array.
 
-    model : dict
-        A fit() result (provides R, C, gamma and the per-output sigma2).
-
-    theta : numpy.ndarray
-        The theta at which the model was fit.
-
-    grad_func : callable
-        Kernel theta-derivative: ``(D, theta) -> (n_pairs, p)`` array.
-
-    Returns
-    -------
-    numpy.ndarray
+    Returns:
         The gradient, shape ``(p,)`` matching the optimized theta dimension.
     """
     R, C, gamma = model["R"], model["C"], model["gamma"]
@@ -80,23 +70,19 @@ class LBFGS(Optimizer):
     the warm-start behavior unchanged -- restarts are only useful for cold fits from
     an unknown scale, where the configured start may miss the global optimum.
 
-    Parameters
-    ----------
-    n_restarts : int
-        Number of additional random restarts (beyond the configured start) to guard
-        against local optima. 0 (default) means a single start from the model theta.
-
-    random_state : int or None
-        Seed for the restart sampling, so multi-start fits are reproducible.
-
-    options : dict or None
-        Options forwarded to ``scipy.optimize.minimize(..., method="L-BFGS-B",
-        options=...)``. Any key the solver accepts works -- ``gtol``, ``ftol``,
-        ``maxiter``, ``maxfun``, ``eps``, ``maxcor``, ``maxls``. The defaults
-        ``{"gtol": 1e-3, "ftol": 1e-6, "maxfun": 100}`` apply relaxed stop tolerances
-        and cap the objective evaluations (the expensive O(n^3) fits) at a level that
-        only stops a runaway search; anything passed here overrides or extends them.
-        None (default) uses the defaults alone.
+    Args:
+        n_restarts: Number of additional random restarts (beyond the configured start) to guard
+            against local optima. 0 (default) means a single start from the model theta.
+        random_state: Seed for the restart sampling, so multi-start fits are reproducible.
+        options: Options forwarded to ``scipy.optimize.minimize(..., method="L-BFGS-B",
+            options=...)``. Any key the solver accepts works -- ``gtol``, ``ftol``,
+            ``maxiter``, ``maxfun``, ``eps``, ``maxcor``, ``maxls``. The defaults
+            ``{"gtol": 1e-3, "ftol": 1e-6, "maxfun": 100}`` apply relaxed stop tolerances
+            and cap the objective evaluations (the expensive O(n^3) fits) at a level that
+            only stops a runaway search; anything passed here overrides or extends them.
+            None (default) uses the defaults alone. Note: hitting the ``maxfun`` cap makes
+            scipy report the start as not-converged, so ``optimization["success"]`` reflects
+            strict scipy convergence, not whether the committed fit is usable.
 
     The held-out set is passed to ``optimize`` (by ``DACE.fit``), not to the
     constructor. When given, theta is chosen by ranking the *entire* search history --

@@ -160,7 +160,9 @@ class Linear(Correlation):
         for j in range(D.shape[1]):
             _b = index_except(D.shape[1], [j])
             _theta = theta[j] if type(theta) is np.ndarray and len(theta) == D.shape[1] else theta
-            dr[:, j] = np.prod(td[:, _b], axis=1) * -_theta * np.sign(D[:, j])
+            # (td_j > 0) zeroes the partial in the clamped (compact-support) tail, where
+            # the factor is flat at 0 -- without it the derivative leaks a spurious -theta.
+            dr[:, j] = np.prod(td[:, _b], axis=1) * -_theta * np.sign(D[:, j]) * (td[:, j] > 0)
         return dr
 
     def _dtheta_per_dim(self, D, theta):
@@ -214,13 +216,10 @@ class Spline(Correlation):
         ss = np.zeros(D.shape)
         xi = np.abs(D) * theta
 
-        sel = np.where(xi <= 0.2)
-        if len(sel) > 0:
-            ss[sel] = 1 - xi[sel] ** 2 * (15 - 30 * xi[sel])
-
-        sel = np.where(np.logical_and(xi > 0.2, xi < 1.0))
-        if len(sel) > 0:
-            ss[sel] = 1.25 * (1 - xi[sel]) ** 3
+        lo = xi <= 0.2
+        mid = (xi > 0.2) & (xi < 1.0)
+        ss[lo] = 1 - xi[lo] ** 2 * (15 - 30 * xi[lo])
+        ss[mid] = 1.25 * (1 - xi[mid]) ** 3
 
         r = np.prod(ss, axis=1)
         return r
@@ -228,23 +227,20 @@ class Spline(Correlation):
     def grad(self, D, theta):
         ss = np.zeros(D.shape)
         xi = np.abs(D) * theta
-        sel = np.where(xi <= 0.2)
-        if len(sel) > 0:
-            ss[sel] = 1 - xi[sel] ** 2 * (15 - 30 * xi[sel])
-        sel = np.where(np.logical_and(xi > 0.2, xi < 1.0))
-        if len(sel) > 0:
-            ss[sel] = 1.25 * (1 - xi[sel]) ** 3
+        lo = xi <= 0.2
+        mid = (xi > 0.2) & (xi < 1.0)
+        ss[lo] = 1 - xi[lo] ** 2 * (15 - 30 * xi[lo])
+        ss[mid] = 1.25 * (1 - xi[mid]) ** 3
 
         dr = np.zeros(D.shape)
-        m, n = D.shape
-        u = np.sign(D) * theta
+        n = D.shape[1]
+        u = np.sign(D) * theta  # d(xi)/d(x) = sign(D) * theta
 
-        sel = np.where(u <= 0.2)
-        if len(sel) > 0:
-            dr[sel] = u[sel] * ((90 * xi[sel] - 30) * xi[sel])
-        sel = np.where(np.logical_and(xi > 0.2, xi < 1.0))
-        if len(sel) > 0:
-            dr[sel] = -3.75 * u[sel] * (1 - xi[sel] ** 2)
+        # region masks key on the scaled distance xi (= |D|*theta), NOT on u.
+        # d/d(xi) of the low branch is (90 xi - 30) xi; of 1.25(1-xi)^3 is -3.75(1-xi)^2;
+        # chain by u for d/d(x).
+        dr[lo] = u[lo] * ((90 * xi[lo] - 30) * xi[lo])
+        dr[mid] = -3.75 * u[mid] * (1 - xi[mid]) ** 2
 
         for j in range(n):
             _ss = np.copy(ss)
@@ -344,10 +340,8 @@ class RationalQuadratic(Correlation):
     tighter, single-scale fit. ``theta`` carries the length-scale(s) and may be a scalar
     (isotropic) or a per-dimension vector (ARD), like the other kernels.
 
-    Parameters
-    ----------
-    alpha : float
-        Tail / scale-mixture parameter (> 0).
+    Args:
+        alpha: Tail / scale-mixture parameter (> 0).
     """
 
     def __init__(self, alpha=0.25):
@@ -387,10 +381,8 @@ class Matern(Correlation):
     of per-dimension Matérns ``M(theta_k * |D_k|)`` (the standard half-integer closed
     forms, so theta=1/length recovers textbook Matérn-nu).
 
-    Parameters
-    ----------
-    nu : float
-        Smoothness; one of 0.5, 1.5, 2.5 (the cases with a closed form).
+    Args:
+        nu: Smoothness; one of 0.5, 1.5, 2.5 (the cases with a closed form).
     """
 
     def __init__(self, nu=2.5):

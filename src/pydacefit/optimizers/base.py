@@ -26,28 +26,25 @@ class Optimizer(ABC):
     def optimize(self, dace, validation=None):
         """Choose theta for the given (partially built) model.
 
-        Parameters
-        ----------
-        dace : DACE
-            Provides the standardized data in ``dace.model`` ("nX"/"nY"), the
-            ``regr`` / ``kernel``, the start ``theta``, the bounds ``tl`` / ``tu``
-            and the ``max_noise`` policy. When ``validation`` is given, ``dace.model``
-            holds only the *training* rows; the held-out rows arrive via ``validation``.
+        Args:
+            dace: Provides the standardized data in ``dace.model`` ("nX"/"nY"), the
+                ``regr`` / ``kernel``, the start ``theta``, the bounds ``tl`` / ``tu``
+                and the ``max_noise`` policy. When ``validation`` is given, ``dace.model``
+                holds only the *training* rows; the held-out rows arrive via ``validation``.
+            validation: Either None (select theta by maximum likelihood -- the default) or a
+                ``(nX_val, nY_val)`` tuple of the held-out rows, already standardized with
+                the training stats. When given, theta is chosen to minimize prediction
+                error on these rows instead of the likelihood: the search is still
+                MLE-driven, but the final pick among the visited thetas is the one with the
+                lowest held-out error. Scored in normalized space by ``DACE._val_error``.
 
-        validation : tuple or None
-            Either None (select theta by maximum likelihood -- the default) or a
-            ``(nX_val, nY_val)`` tuple of the held-out rows, already standardized with
-            the training stats. When given, theta is chosen to minimize prediction
-            error on these rows instead of the likelihood: the search is still
-            MLE-driven, but the final pick among the visited thetas is the one with the
-            lowest held-out error. Scored in normalized space by ``DACE._val_error``.
-
-        Returns
-        -------
-        tuple
+        Returns:
             ``(model, optimization)`` -- the chosen fit() result and a record of the
             search (a dict with at least ``"best"`` and ``"models"``; None when the
             optimizer does no search, e.g. ``Fixed``). It lands on ``DACE.optimization``.
+            ``"models"`` is the list of visited fits but is not a uniform type across
+            optimizers: Boxmin includes infeasible placeholders (``{"theta", "obj": inf}``
+            with no ``"gamma"``/``"f"``), so consumers should filter on ``"gamma" in m``.
         """
 
     def _select(self, dace, candidates, validation=None):
@@ -59,22 +56,14 @@ class Optimizer(ABC):
         search, the validation set makes the final pick. Infeasible placeholders
         (which carry no built model) are skipped.
 
-        Parameters
-        ----------
-        dace : DACE
-            The model being fit; provides normalized-space scoring through
-            ``_val_error`` against the training rows in ``dace.model``.
+        Args:
+            dace: The model being fit; provides normalized-space scoring through
+                ``_val_error`` against the training rows in ``dace.model``.
+            candidates: The fit() results visited during the search.
+            validation: The held-out ``(nX_val, nY_val)`` rows (standardized), or None for the
+                maximum-likelihood pick.
 
-        candidates : list of dict
-            The fit() results visited during the search.
-
-        validation : tuple or None
-            The held-out ``(nX_val, nY_val)`` rows (standardized), or None for the
-            maximum-likelihood pick.
-
-        Returns
-        -------
-        dict
+        Returns:
             The selected fit() result.
         """
         feasible = [m for m in candidates if "gamma" in m]
@@ -95,36 +84,27 @@ def fit_feasible(dace, theta, relocate=True):
     feasible value -- this yields an exact fit at the deliberate noise (no climbing) and
     is strictly better than adding more noise when a feasible theta exists.
     **Noise climbing** (only if no theta in the bounds is feasible): fall back to a fit at
-    the geometric-midpoint theta (or ``theta`` when not relocating) and climb the noise up
-    to the model's ``max_noise`` ceiling. With ``max_noise=0`` no climbing is allowed, so
+    the highest theta the relocation reached -- where R is closest to the identity and so
+    easiest to regularize -- (or ``theta`` when not relocating) and climb the noise up to
+    the model's ``max_noise`` ceiling. With ``max_noise=0`` no climbing is allowed, so
     this raises (strict); a positive ceiling yields the smallest positive-definite fit and
     records the noise, or raises if even ``max_noise`` is not enough.
 
-    Parameters
-    ----------
-    dace : DACE
-        Supplies the standardized data, kernel, regression, bounds, ``noise`` and
-        ``max_noise``.
+    Args:
+        dace: Supplies the standardized data, kernel, regression, bounds, ``noise`` and
+            ``max_noise``.
+        theta: The theta to fit at (already within the bounds).
+        relocate: Whether to search upward for a feasible theta (True for the searching
+            optimizers) or stay at ``theta`` (False for a fixed-theta fit).
 
-    theta : float or numpy.ndarray
-        The theta to fit at (already within the bounds).
-
-    relocate : bool
-        Whether to search upward for a feasible theta (True for the searching
-        optimizers) or stay at ``theta`` (False for a fixed-theta fit).
-
-    Returns
-    -------
-    tuple
+    Returns:
         ``(theta_used, model)``.
 
-    Raises
-    ------
-    DaceFitError
-        If no positive-definite fit is possible within the ``max_noise`` ceiling.
+    Raises:
+        DaceFitError: If no positive-definite fit is possible within the ``max_noise`` ceiling.
     """
     X, Y = dace.model["nX"], dace.model["nY"]
-    lo, up = dace.tl, dace.tu
+    up = dace.tu
     t_try = np.copy(theta) if isinstance(theta, np.ndarray) else theta
 
     # 1. preferred: an exact positive-definite fit at the deliberate noise (moving up
@@ -135,19 +115,22 @@ def fit_feasible(dace, theta, relocate=True):
         except DaceFitError:
             if not relocate:
                 break
-            nxt = np.minimum(t_try * 2.0, up)
+            # move theta up toward thetaU (R -> I is positive-definite). The max(., 1e-12)
+            # floor lets a zero component escape the multiplicative walk -- DACE's default
+            # thetaL is 0.0, and 0 * 2 == 0 would otherwise pin it there forever.
+            nxt = np.minimum(np.maximum(t_try, 1e-12) * 2.0, up)
             if np.all(nxt == t_try):  # already at the upper bound -> nowhere left to move
                 break
             t_try = nxt
 
-    # 2. no feasible theta anywhere -> climb the noise at the fallback theta up to the
-    #    model's max_noise ceiling. fit() climbs from `noise` to the smallest amount that
-    #    works (recording it) or raises if even max_noise is not enough; max_noise=0 means
-    #    no climbing, so this is the strict raise.
-    if relocate:
-        t_fb = np.sqrt(np.atleast_1d(np.asarray(lo, dtype=float)) * np.atleast_1d(np.asarray(up, dtype=float)))
-    else:
-        t_fb = theta
+    # 2. no feasible theta anywhere -> climb the noise up to the model's max_noise ceiling
+    #    at the highest theta we reached (t_try): there R is closest to the identity and so
+    #    easiest to regularize -- climbing at theta~0 (all-ones R) would need noise ~ n and
+    #    blow past max_noise. When not relocating, t_try is just the requested theta. fit()
+    #    climbs from `noise` to the smallest amount that works (recording it) or raises if
+    #    even max_noise is not enough; max_noise=0 means no climbing, so this is the strict
+    #    raise.
+    t_fb = t_try
     try:
         return t_fb, fit(X, Y, dace.regr, dace.kernel, t_fb, noise=dace.noise, max_noise=dace.max_noise)
     except DaceFitError as e:

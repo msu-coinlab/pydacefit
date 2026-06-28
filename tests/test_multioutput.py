@@ -110,3 +110,37 @@ def test_lbfgs_objective_gradient_matrix_Y_end_to_end():
     interior = (theta > 1e-4 * 1.01) & (theta < 50.0 * 0.99)
     assert np.all(np.abs(grad[interior]) < 1e-3)
     assert model.predict(rng.random((5, 2))).y.shape == (5, 2)
+
+
+def test_predict_grad_and_mse_grad_shapes_for_multioutput():
+    # predict(grad=True) must work for q>1 (it used to crash on the sY broadcast): the
+    # mean gradient is (m, q, d) -- one gradient per output -- and each output's gradient
+    # matches a finite difference. The shared-correlation mse and its gradient stay (m, 1)
+    # / (m, d). Single-output keeps the historical (m, d) mean-gradient shape.
+    rng = np.random.default_rng(7)
+    X = rng.random((16, 2))
+    Y = np.column_stack([np.sum(np.sin(X * 3.0), axis=1), np.sum(np.cos(X * 2.0), axis=1)])
+    model = DACE(regr=CONSTANT, corr=GAUSS, theta=0.5 * np.ones(2), thetaL=0.05 * np.ones(2), thetaU=10.0 * np.ones(2))
+    model.fit(X, Y)
+
+    q = np.array([[0.4, 0.7]])
+    p = model.predict(q, mse=True, grad=True)
+    assert p.grad.shape == (1, 2, 2)  # (m, q, d)
+    assert p.mse.shape == (1, 1)  # shared across outputs
+    assert p.mse_grad.shape == (1, 2)  # (m, d)
+
+    # each output's mean gradient matches central finite differences
+    eps = 1e-6
+    for j in range(2):
+        fd = np.zeros(2)
+        for k in range(2):
+            qp, qm = q.copy(), q.copy()
+            qp[0, k] += eps
+            qm[0, k] -= eps
+            fd[k] = (model.predict(qp).y[0, j] - model.predict(qm).y[0, j]) / (2 * eps)
+        assert np.allclose(p.grad[0, j], fd, rtol=1e-4, atol=1e-6)
+
+    # single-output keeps the (m, d) mean-gradient shape (no per-output axis)
+    single = DACE(regr=CONSTANT, corr=GAUSS, theta=0.5 * np.ones(2), thetaL=0.05 * np.ones(2), thetaU=10.0 * np.ones(2))
+    single.fit(X, Y[:, 0])
+    assert single.predict(q, grad=True).grad.shape == (1, 2)

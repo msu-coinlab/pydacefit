@@ -1,10 +1,11 @@
 """Golden behavior-oracle: tight snapshots of DACE across its well-conditioned envelope.
 
-Spans all seven kernels, the three regression trends, the optimization and the
-fixed-theta paths, scalar and vector (ARD) theta, and the prediction, MSE and
-gradient outputs. Inputs are kept well-conditioned on purpose — degenerate /
-ill-conditioned behavior is pinned as a contract in test_degenerate.py, because
-those outputs are numerically unstable and unfit for a tight cross-platform baseline.
+Spans all nine kernels (Matérn at each smoothness nu), the three regression trends,
+the optimization and the fixed-theta paths, scalar and vector (ARD) theta, and the
+prediction, MSE and gradient outputs. Inputs are kept well-conditioned on purpose —
+degenerate / ill-conditioned behavior is pinned as a contract in test_degenerate.py,
+because those outputs are numerically unstable and unfit for a tight cross-platform
+baseline.
 """
 
 import numpy as np
@@ -16,6 +17,7 @@ from pydacefit.corr import (
     Gaussian,
     GeneralizedExponential,
     Linear,
+    Matern,
     RationalQuadratic,
     Spherical,
     Spline,
@@ -61,6 +63,10 @@ CASES = [
     # pin alpha explicitly so the baseline is independent of the RQ default (now 0.25)
     ("rq/const/opt-scalar", ConstantRegression(), RationalQuadratic(alpha=1.0), _OPT),
     ("rq/quad/opt-ard", QuadraticRegression(), RationalQuadratic(alpha=1.0), _ARD),
+    # Matérn at each closed-form smoothness; pin nu so the baseline is default-independent
+    ("matern25/const/opt-scalar", ConstantRegression(), Matern(nu=2.5), _OPT),
+    ("matern15/linear/noopt", LinearRegression(), Matern(nu=1.5), _NOOPT),
+    ("matern05/const/noopt", ConstantRegression(), Matern(nu=0.5), _NOOPT),
 ]
 
 

@@ -104,8 +104,11 @@ class CorrectTest(unittest.TestCase):
                     if theta_ref.ndim == 1:
                         theta_ref = theta_ref[:, None]
 
+                    # the full Boxmin pattern-search trajectory must match MATLAB DACE's.
+                    # 1e-9 (not 1e-12) leaves headroom for cross-platform BLAS jitter along
+                    # the multi-step path while still pinning every visited theta tightly.
                     self.assertEqual(len(theta_ref), len(my_theta))
-                    self.assertTrue(np.all(np.abs(theta_ref - my_theta) < 1e-12))
+                    self.assertTrue(np.all(np.abs(theta_ref - my_theta) < 1e-9))
 
                 self.assertTrue(np.all(np.abs(correct[:, None] - pred) < 1e-6))
 

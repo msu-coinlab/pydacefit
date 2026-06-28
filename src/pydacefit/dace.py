@@ -14,26 +14,27 @@ from pydacefit.regr import ConstantRegression
 class Prediction:
     """The result of ``DACE.predict``: the mean plus any requested extras, named.
 
-    ``y`` is always populated; ``mse`` and ``grad`` are ``None`` unless their flag was
-    set on the call. The type is the same every call, so callers read fields instead of
-    guessing tuple positions, and a single ``predict`` pass shares the kernel matrix and
-    Cholesky solve across the mean and variance.
+    ``y`` is always populated; ``mse``, ``grad`` and ``mse_grad`` are ``None`` unless the
+    flags that produce them were set on the call. The type is the same every call, so
+    callers read fields instead of guessing tuple positions, and a single ``predict``
+    pass shares the kernel matrix and Cholesky solve across the mean and variance.
 
-    Parameters
-    ----------
-    y : numpy.ndarray
-        Predicted mean, shape ``(m, q)``.
-
-    mse : numpy.ndarray or None
-        Predictive variance (kriging MSE), shape ``(m, 1)``, or None when not requested.
-
-    grad : numpy.ndarray or None
-        Gradient of the mean w.r.t. the query point, ``(m, d)``, or None.
+    Args:
+        y: Predicted mean, shape ``(m, q)``.
+        mse: Predictive variance (kriging MSE), shape ``(m, 1)``, or None when not requested.
+            Shared across outputs for a multi-output model, so it stays ``(m, 1)``.
+        grad: Gradient of the mean w.r.t. the query point, or None. ``(m, d)`` for a
+            single-output model; ``(m, q, d)`` (one gradient per output) for multi-output.
+        mse_grad: Gradient of the predictive variance w.r.t. the query point, ``(m, d)``, or None.
+            Populated only when ``predict`` is called with both ``mse=True`` and ``grad=True``
+            (it reuses the variance and mean-gradient terms). Lets a caller form ``grad(std)``
+            as ``mse_grad / (2*sqrt(mse))`` -- e.g. for gradient-based Expected Improvement.
     """
 
     y: np.ndarray
     mse: np.ndarray | None = None
     grad: np.ndarray | None = None
+    mse_grad: np.ndarray | None = None
 
 
 class DACE:
@@ -53,49 +54,33 @@ class DACE:
         It can be initialized with different regression and correlation types, and
         whether hyperparameter optimization is used is controlled by the theta bounds.
 
-        Parameters
-        ----------
-        regr : Regression, optional
-            Regression trend instance: ConstantRegression(), LinearRegression() or QuadraticRegression().
-            Defaults to ConstantRegression().
-
-        corr : Correlation, optional
-            Correlation (kernel) instance, e.g. Gaussian(), Cubic(), Exponential(),
-            RationalQuadratic(alpha=...). Defaults to Gaussian().
-
-        theta : float
-            Initial value of theta. Can be a vector or a float
-
-        thetaL : float
-            The lower bound if theta should be optimized.
-
-        thetaU : float
-            The upper bound if theta should be optimized.
-
-        optimizer : Optimizer, optional
-            Strategy used to optimize theta when bounds are given (an instance of
-            pydacefit.optimizers.Optimizer). Defaults to Boxmin() (pattern search);
-            LBFGS() and Fixed() are the other built-ins.
-
-        noise : float
-            Deliberate observation noise added to the diagonal of the correlation
-            matrix on every fit. Because that diagonal is unit, it is a noise-to-signal
-            ratio: noise=0.1 models 10% noise. 0.0 (default) interpolates the data;
-            noise>0 makes a regression GP that smooths through the points instead.
-
-        max_noise : float
-            Extra auto-repair budget added *on top of* ``noise`` to make an otherwise-
-            infeasible committed fit possible. When the correlation matrix is not
-            positive-definite at ``noise``, a separate repair term climbs from a tiny
-            floor up to ``max_noise`` (smallest amount that works) and the total effective
-            diagonal is recorded in model["noise"], with a warning. Being independent of
-            ``noise`` means the budget works no matter how much deliberate noise was set.
-            The default ``1e-4`` auto-repairs tiny numerical non-positive-definiteness
-            (near-duplicate points, mild ill-conditioning) with negligible bias; genuine
-            conditional non-positive-definiteness (e.g. cubic at a bad theta) needs far
-            more and still raises. Set ``0.0`` for strict interpolation (raise on any
-            non-PD). The theta *search* never repairs -- a non-PD theta is simply
-            infeasible.
+        Args:
+            regr: Regression trend instance: ConstantRegression(), LinearRegression() or QuadraticRegression().
+                Defaults to ConstantRegression().
+            corr: Correlation (kernel) instance, e.g. Gaussian(), Cubic(), Exponential(),
+                RationalQuadratic(alpha=...). Defaults to Gaussian().
+            theta: Initial value of theta. Can be a vector or a float
+            thetaL: The lower bound if theta should be optimized.
+            thetaU: The upper bound if theta should be optimized.
+            optimizer: Strategy used to optimize theta when bounds are given (an instance of
+                pydacefit.optimizers.Optimizer). Defaults to Boxmin() (pattern search);
+                LBFGS() and Fixed() are the other built-ins.
+            noise: Deliberate observation noise added to the diagonal of the correlation
+                matrix on every fit. Because that diagonal is unit, it is a noise-to-signal
+                ratio: noise=0.1 models 10% noise. 0.0 (default) interpolates the data;
+                noise>0 makes a regression GP that smooths through the points instead.
+            max_noise: Extra auto-repair budget added *on top of* ``noise`` to make an otherwise-
+                infeasible committed fit possible. When the correlation matrix is not
+                positive-definite at ``noise``, a separate repair term climbs from a tiny
+                floor up to ``max_noise`` (smallest amount that works) and the total effective
+                diagonal is recorded in model["noise"], with a warning. Being independent of
+                ``noise`` means the budget works no matter how much deliberate noise was set.
+                The default ``1e-4`` auto-repairs tiny numerical non-positive-definiteness
+                (near-duplicate points, mild ill-conditioning) with negligible bias; genuine
+                conditional non-positive-definiteness (e.g. cubic at a bad theta) needs far
+                more and still raises. Set ``0.0`` for strict interpolation (raise on any
+                non-PD). The theta *search* never repairs -- a non-PD theta is simply
+                infeasible.
         """
         super().__init__()
         self.regr = regr if regr is not None else ConstantRegression()
@@ -128,28 +113,20 @@ class DACE:
     def fit(self, X, Y, validation=None, append=True):
         """Fit the model, optionally selecting theta on a held-out subset of the rows.
 
-        Parameters
-        ----------
-        X : numpy.ndarray
-            Training inputs, shape ``(n, d)``.
-
-        Y : numpy.ndarray
-            Training targets, shape ``(n,)`` or ``(n, q)`` for multi-output.
-
-        validation : numpy.ndarray or None
-            Optional binary mask over the rows of ``X`` (one entry per row), ``None``
-            by default. A truthy entry marks a row as *held out for theta selection*:
-            theta candidates are fit on the ``0`` rows and scored on the held-out rows
-            (in normalized space), and the theta with the lowest held-out error is
-            chosen instead of the maximum-likelihood one. ``None`` keeps the pure MLE
-            behavior. Has no effect without theta bounds -- there is no search to steer.
-
-        append : bool
-            What the *final* model is fit on once theta is chosen, when a mask is given.
-            ``True`` (default) refits on all rows, so the held-out rows rejoin and
-            ``predict`` uses every label. ``False`` keeps the model fit on the ``0``
-            rows only, so it never saw the held-out rows (useful when their error is
-            reported separately). Ignored when ``validation`` is ``None``.
+        Args:
+            X: Training inputs, shape ``(n, d)``.
+            Y: Training targets, shape ``(n,)`` or ``(n, q)`` for multi-output.
+            validation: Optional binary mask over the rows of ``X`` (one entry per row), ``None``
+                by default. A truthy entry marks a row as *held out for theta selection*:
+                theta candidates are fit on the ``0`` rows and scored on the held-out rows
+                (in normalized space), and the theta with the lowest held-out error is
+                chosen instead of the maximum-likelihood one. ``None`` keeps the pure MLE
+                behavior. Has no effect without theta bounds -- there is no search to steer.
+            append: What the *final* model is fit on once theta is chosen, when a mask is given.
+                ``True`` (default) refits on all rows, so the held-out rows rejoin and
+                ``predict`` uses every label. ``False`` keeps the model fit on the ``0``
+                rows only, so it never saw the held-out rows (useful when their error is
+                reported separately). Ignored when ``validation`` is ``None``.
         """
         # the targets should be a 2d array
         if len(Y.shape) == 1:
@@ -250,32 +227,22 @@ class DACE:
         points as the held-out set -- so each refit nudges theta toward whatever best
         predicts the freshly added points, exactly what an online/surrogate loop wants.
 
-        Parameters
-        ----------
-        X : numpy.ndarray
-            The new input points to add (only the additions, not the full set).
+        Args:
+            X: The new input points to add (only the additions, not the full set).
+            Y: The target values corresponding to the new points ``X``.
+            optimizer: Strategy to use for this refit only. ``None`` (default) uses ``LBFGS()`` --
+                a fast, warm-started local refine, the natural choice for a refit since the
+                optimum barely moves. Pass ``Boxmin()`` for a global re-search, or
+                ``Fixed()`` to freeze theta and just re-solve. Has no effect when the model
+                was built without theta bounds. Requires a prior successful ``fit``.
+            validation: Whether the *new* points are held out to select theta. ``True`` (default)
+                makes the new points the validation set (the existing data is the training
+                set), so theta is chosen by how well the old data predicts the new points --
+                a generalization-driven update. ``False`` re-fits by likelihood over all
+                data. Either way the new points are appended (refit always appends).
 
-        Y : numpy.ndarray
-            The target values corresponding to the new points ``X``.
-
-        optimizer : Optimizer, optional
-            Strategy to use for this refit only. ``None`` (default) uses ``LBFGS()`` --
-            a fast, warm-started local refine, the natural choice for a refit since the
-            optimum barely moves. Pass ``Boxmin()`` for a global re-search, or
-            ``Fixed()`` to freeze theta and just re-solve. Has no effect when the model
-            was built without theta bounds. Requires a prior successful ``fit``.
-
-        validation : bool
-            Whether the *new* points are held out to select theta. ``True`` (default)
-            makes the new points the validation set (the existing data is the training
-            set), so theta is chosen by how well the old data predicts the new points --
-            a generalization-driven update. ``False`` re-fits by likelihood over all
-            data. Either way the new points are appended (refit always appends).
-
-        Raises
-        ------
-        Exception
-            If called before any successful ``fit``.
+        Raises:
+            Exception: If called before any successful ``fit``.
         """
         if self.model is None:
             raise Exception("refit() requires a prior fit(); call fit() first.")
@@ -318,21 +285,13 @@ class DACE:
         same ``nX`` / ``nY`` the candidate trained on), so there is nothing to
         destandardize and the criterion is scale-free across outputs.
 
-        Parameters
-        ----------
-        model : dict
-            A fit() result (carries beta, gamma, theta, kernel, regr), fit on the
-            training rows.
+        Args:
+            model: A fit() result (carries beta, gamma, theta, kernel, regr), fit on the
+                training rows.
+            nXv: Held-out inputs, standardized, shape ``(m, d)``.
+            nYv: Held-out targets, standardized, shape ``(m,)`` or ``(m, q)``.
 
-        nXv : numpy.ndarray
-            Held-out inputs, standardized, shape ``(m, d)``.
-
-        nYv : numpy.ndarray
-            Held-out targets, standardized, shape ``(m,)`` or ``(m, q)``.
-
-        Returns
-        -------
-        float
+        Returns:
             The RMSE in normalized Y space.
         """
         nX = self.model["nX"]  # the training rows the candidate was fit on
@@ -352,22 +311,20 @@ class DACE:
         Mean and variance share the kernel matrix and the Cholesky solve, so computing
         them together is cheaper than two calls -- this is why both live on one method.
 
-        Parameters
-        ----------
-        _X : numpy.ndarray
-            Query inputs, shape ``(m, d)``.
+        Args:
+            _X: Query inputs, shape ``(m, d)``.
+            mse: Also return the predictive variance (kriging MSE), shape ``(m, 1)``. For a
+                multi-output model the variance is *shared* across outputs (the kernel and
+                theta are shared), so it stays ``(m, 1)`` regardless of the number of outputs.
+            grad: Also return the gradient of the mean w.r.t. the query point. Single-output
+                models return ``(m, d)``; multi-output models return ``(m, q, d)`` -- one
+                gradient per output. This is what a gradient-based optimizer searches over.
 
-        mse : bool
-            Also return the predictive variance (kriging MSE), shape ``(m, 1)``.
-
-        grad : bool
-            Also return the gradient of the mean w.r.t. the query point, ``(m, d)`` --
-            what a gradient-based optimizer uses to search over the surrogate.
-
-        Returns
-        -------
-        Prediction
+        Returns:
             ``y`` (always), plus ``mse`` / ``grad`` when their flag is set (else None).
+            When ``mse`` and ``grad`` are *both* set, ``mse_grad`` (the variance gradient,
+            ``(m, d)``) is also returned -- it shares the variance and mean-gradient terms,
+            so the extra cost is one triangular solve per point.
         """
         mX, sX, nX = self.model["mX"], self.model["sX"], self.model["nX"]
         mY, sY = self.model["mY"], self.model["sY"]
@@ -387,20 +344,53 @@ class DACE:
         _Y = (_sY * sY) + mY
 
         _mse = None
+        _mse_clamped = None  # mask of points whose variance was clamped (for mse_grad)
         if mse:
             rt = np.linalg.lstsq(self.model["C"], _R.T, rcond=None)[0]
+            Ginv = np.linalg.inv(self.model["G"])
             u = (self.model["Ft"].T @ rt).T - _F
-            v = u @ np.linalg.inv(self.model["G"])
+            v = u @ Ginv
             _mse = (self.model["sigma2"] * (1 + np.sum(v**2, axis=1) - np.sum(rt**2, axis=0)))[:, None]
+            # the kriging variance is non-negative by theory; negatives are rounding near
+            # training points (the cubic/spline kernels can dip moderately negative over a
+            # region). Clamp at 0 so downstream sqrt(mse) (std, EI) never returns NaN.
+            _mse_clamped = (_mse < 0.0).ravel()
+            _mse = np.maximum(_mse, 0.0)
+
+        # mse_grad is only available alongside both the variance and the mean gradient,
+        # since it reuses their terms (rt, v, Ginv and the per-point dR/dF). sigma2 is
+        # already destandardized, and the dimensionless bracket is in normalized space,
+        # so the chain rule to the original input is a single 1/sX scaling per dimension.
+        want_mse_grad = mse and grad
+        _mse_grad = np.zeros(_X.shape) if want_mse_grad else None
 
         _grad = None
         if grad:
-            # the gradient must be calculated for each point at once
-            _grad = np.zeros(_X.shape)
+            # the gradient must be calculated for each point at once. dy is (q, d) -- one
+            # gradient row per output -- destandardized by sY per output and 1/sX per input
+            # dimension. Single-output keeps the historical (m, d) shape; multi-output
+            # returns (m, q, d) so every output's gradient is available.
+            q = _sY.shape[1]
+            _grad = np.zeros((_X.shape[0], _X.shape[1]) if q == 1 else (_X.shape[0], q, _X.shape[1]))
             for i, _x in enumerate(_nX):
                 _dF = self.regr.grad(_x[None, :])
                 _dR = calc_grad(_x[None, :], nX, corr.grad, theta)
-                dy = (_dF @ beta).T + gamma.T @ _dR
-                _grad[i] = dy * sY / sX
+                dy = (_dF @ beta).T + gamma.T @ _dR  # (q, d)
+                dy = dy * sY[:, None] / sX[None, :]  # destandardize: output-wise and dim-wise
+                _grad[i] = dy[0] if q == 1 else dy
 
-        return Prediction(y=_Y, mse=_mse, grad=_grad)
+                if want_mse_grad:
+                    # bracket = 1 + ||v||^2 - ||rt||^2; differentiate w.r.t. the (normalized)
+                    # query point. drt = C^-1 (dr/dx); du = Ft^T drt - df/dx; dv = du Ginv.
+                    drt = np.linalg.lstsq(self.model["C"], _dR, rcond=None)[0]  # (n, d)
+                    du = (self.model["Ft"].T @ drt).T - _dF  # (d, p)
+                    dv = du @ Ginv  # (d, p)
+                    d_bracket = 2.0 * (dv @ v[i] - drt.T @ rt[:, i])  # (d,)
+                    _mse_grad[i] = self.model["sigma2"] * d_bracket / sX
+
+            if want_mse_grad:
+                # where the variance was clamped to 0 the clamped surface is flat, so its
+                # gradient is 0 -- keep mse_grad consistent with the mse predict returns.
+                _mse_grad[_mse_clamped] = 0.0
+
+        return Prediction(y=_Y, mse=_mse, grad=_grad, mse_grad=_mse_grad)
