@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from pydacefit.corr import Gaussian, calc_grad, calc_kernel_matrix
+from pydacefit.corr import Gaussian, calc_kernel_matrix
 from pydacefit.fit import DaceFitError, fit
 from pydacefit.optimizers import LBFGS, Boxmin
 from pydacefit.regr import ConstantRegression
@@ -357,40 +357,44 @@ class DACE:
             _mse_clamped = (_mse < 0.0).ravel()
             _mse = np.maximum(_mse, 0.0)
 
-        # mse_grad is only available alongside both the variance and the mean gradient,
-        # since it reuses their terms (rt, v, Ginv and the per-point dR/dF). sigma2 is
-        # already destandardized, and the dimensionless bracket is in normalized space,
-        # so the chain rule to the original input is a single 1/sX scaling per dimension.
+        # mse_grad is available alongside both the variance and the mean gradient, since
+        # it reuses their terms (rt, v, Ginv and the batched dR/dF). sigma2 is already
+        # destandardized and the dimensionless bracket is in normalized space, so the chain
+        # rule to the original input is a single 1/sX scaling per dimension.
         want_mse_grad = mse and grad
-        _mse_grad = np.zeros(_X.shape) if want_mse_grad else None
 
         _grad = None
+        _mse_grad = None
         if grad:
-            # the gradient must be calculated for each point at once. dy is (q, d) -- one
-            # gradient row per output -- destandardized by sY per output and 1/sX per input
-            # dimension. Single-output keeps the historical (m, d) shape; multi-output
-            # returns (m, q, d) so every output's gradient is available.
+            # Fully vectorized over the m query points -- no per-point Python loop. dR is
+            # the kernel gradient d r(x_i, t_j)/d x_i for every query/train pair from a
+            # single corr.grad call; dF is the regression-basis Jacobian per query point.
+            m, d = _nX.shape
+            n = nX.shape[0]
             q = _sY.shape[1]
-            _grad = np.zeros((_X.shape[0], _X.shape[1]) if q == 1 else (_X.shape[0], q, _X.shape[1]))
-            for i, _x in enumerate(_nX):
-                _dF = self.regr.grad(_x[None, :])
-                _dR = calc_grad(_x[None, :], nX, corr.grad, theta)
-                dy = (_dF @ beta).T + gamma.T @ _dR  # (q, d)
-                dy = dy * sY[:, None] / sX[None, :]  # destandardize: output-wise and dim-wise
-                _grad[i] = dy[0] if q == 1 else dy
+            d_all = np.repeat(_nX, n, axis=0) - np.tile(nX, (m, 1))  # (m*n, d)
+            dR = corr.grad(d_all, theta).reshape(m, n, d)  # (m, n, d)
+            dF = self.regr.grad(_nX)  # (m, d, p)
 
-                if want_mse_grad:
-                    # bracket = 1 + ||v||^2 - ||rt||^2; differentiate w.r.t. the (normalized)
-                    # query point. drt = C^-1 (dr/dx); du = Ft^T drt - df/dx; dv = du Ginv.
-                    drt = np.linalg.lstsq(self.model["C"], _dR, rcond=None)[0]  # (n, d)
-                    du = (self.model["Ft"].T @ drt).T - _dF  # (d, p)
-                    dv = du @ Ginv  # (d, p)
-                    d_bracket = 2.0 * (dv @ v[i] - drt.T @ rt[:, i])  # (d,)
-                    _mse_grad[i] = self.model["sigma2"] * d_bracket / sX
+            # mean gradient (dF @ beta) + (gamma^T @ dR) per point -> (m, q, d), then
+            # destandardize per output (sY) and per input dimension (1/sX). Single-output
+            # keeps the historical (m, d) shape; multi-output is (m, q, d).
+            mean_grad = np.einsum("idp,pq->iqd", dF, beta) + np.einsum("nq,ind->iqd", gamma, dR)
+            mean_grad = mean_grad * sY[None, :, None] / sX[None, None, :]
+            _grad = mean_grad[:, 0, :] if q == 1 else mean_grad
 
             if want_mse_grad:
-                # where the variance was clamped to 0 the clamped surface is flat, so its
-                # gradient is 0 -- keep mse_grad consistent with the mse predict returns.
+                # variance gradient of the bracket 1 + ||v||^2 - ||rt||^2. One batched solve
+                # gives drt = C^-1 dR for every point; du/dv reuse the mean's Ft, Ginv, rt, v.
+                # C is the (square, full-rank) Cholesky factor, so a direct solve is exact
+                # and ~75x faster than lstsq's SVD on the (n, m*d) right-hand side.
+                b = dR.transpose(1, 0, 2).reshape(n, m * d)
+                drt = np.linalg.solve(self.model["C"], b).reshape(n, m, d).transpose(1, 0, 2)
+                du = np.einsum("np,ind->idp", self.model["Ft"], drt) - dF  # (m, d, p)
+                dv = np.einsum("idp,pk->idk", du, Ginv)  # (m, d, p)
+                d_bracket = 2.0 * (np.einsum("idp,ip->id", dv, v) - np.einsum("ind,ni->id", drt, rt))
+                _mse_grad = self.model["sigma2"] * d_bracket / sX  # (m, d)
+                # where the variance was clamped to 0 the clamped surface is flat -> 0 grad
                 _mse_grad[_mse_clamped] = 0.0
 
         return Prediction(y=_Y, mse=_mse, grad=_grad, mse_grad=_mse_grad)

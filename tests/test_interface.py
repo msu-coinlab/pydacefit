@@ -160,19 +160,20 @@ def test_repr_is_readable():
 
 
 def test_trend_grad_matches_finite_difference():
-    # the analytic basis gradient (used by predict(grad=True)) vs FD.
-    # grad(X) is evaluated at a single point and is constant in X for these trends.
+    # the analytic basis gradient (used by predict(grad=True)) vs FD. grad(X) is vectorized
+    # over rows: shape (m, d, n_basis), one (d, n_basis) Jacobian per row.
     rng = np.random.default_rng(1)
-    x = rng.random((1, 3))
+    X = rng.random((5, 3))  # several rows at once
     eps = 1e-6
     for trend in TRENDS:
-        analytic = trend.grad(x)  # shape (d, n_basis)
+        analytic = trend.grad(X)  # (m, d, n_basis)
+        assert analytic.shape == (X.shape[0], X.shape[1], trend(X).shape[1])
         numeric = np.zeros_like(analytic)
-        for k in range(x.shape[1]):
-            xp, xm = x.copy(), x.copy()
-            xp[0, k] += eps
-            xm[0, k] -= eps
-            numeric[k] = (trend(xp)[0] - trend(xm)[0]) / (2 * eps)
+        for k in range(X.shape[1]):
+            Xp, Xm = X.copy(), X.copy()
+            Xp[:, k] += eps
+            Xm[:, k] -= eps
+            numeric[:, k, :] = (trend(Xp) - trend(Xm)) / (2 * eps)
         assert np.allclose(analytic, numeric, atol=1e-6)
 
 

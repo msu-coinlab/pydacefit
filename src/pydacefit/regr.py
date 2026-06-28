@@ -6,12 +6,15 @@ import numpy as np
 class Regression:
     """A regression trend: a callable object bundling its own gradient.
 
-    - ``__call__(X)`` -- the design matrix ``F`` of basis functions evaluated at ``X``.
-    - ``grad(X)`` -- derivative of the basis w.r.t. the design point, used by
-      ``predict(grad=True)``.
+    - ``__call__(X)`` -- the design matrix ``F`` of basis functions evaluated at ``X``,
+      shape ``(m, p)`` for ``m`` rows and ``p`` basis terms.
+    - ``grad(X)`` -- derivative of the basis w.r.t. the design point, shape ``(m, d, p)``
+      (one ``(d, p)`` Jacobian per row), used by ``predict(grad=True)``.
 
-    ``grad`` is optional in the same sense as ``Correlation.grad``: a trend without an
-    analytic form leaves it raising ``NotImplementedError``.
+    Both are vectorized over the rows of ``X`` so ``predict`` can evaluate every query
+    point in one batched call. ``grad`` is optional in the same sense as
+    ``Correlation.grad``: a trend without an analytic form leaves it raising
+    ``NotImplementedError``.
     """
 
     def __call__(self, X):
@@ -31,7 +34,7 @@ class ConstantRegression(Regression):
         return np.ones((X.shape[0], 1))
 
     def grad(self, X):
-        return np.zeros((X.shape[1], 1))
+        return np.zeros((X.shape[0], X.shape[1], 1))
 
 
 class LinearRegression(Regression):
@@ -41,11 +44,20 @@ class LinearRegression(Regression):
         return np.column_stack([np.ones((X.shape[0], 1)), X])
 
     def grad(self, X):
-        return np.column_stack([np.zeros((X.shape[1], 1)), np.eye(X.shape[1])])
+        m, d = X.shape
+        # per row the Jacobian is [d(1)/dx=0 | d(x)/dx=I]; identical for every row.
+        g = np.zeros((m, d, 1 + d))
+        g[:, :, 1:] = np.eye(d)
+        return g
 
 
 class QuadraticRegression(Regression):
     """Quadratic trend: intercept, linear terms and all pairwise products."""
+
+    @staticmethod
+    def _pairs(d):
+        # column order of the quadratic block: (a, b) with a <= b, matching __call__.
+        return [(a, b) for a in range(d) for b in range(a, d)]
 
     def __call__(self, X):
         m, n, nn = X.shape[0], X.shape[1], int((X.shape[1] + 1) * (X.shape[1]) / 2)
@@ -63,20 +75,17 @@ class QuadraticRegression(Regression):
         return np.column_stack([np.ones((X.shape[0], 1)), X, M])
 
     def grad(self, X):
-        m, n = X.shape
-        nn = int((n + 1) * (n + 2) / 2)
-
-        df = np.column_stack([np.zeros((n, 1)), np.eye(n), np.zeros((n, nn - n - 1))])
-
-        q = n
-        j = n + 1
-
-        for k in range(n):
-            df[k, j + np.arange(q)] = np.column_stack([2 * X[:, [k]], X[:, np.arange(k + 1, n)]])
-
-            for i in range(n - k - 1):
-                df[k + i + 1, j + 1 + i] = X[0, k]
-            j = j + q
-            q = q - 1
-
-        return df
+        m, d = X.shape
+        # intercept (zero) and linear (identity) blocks, broadcast over rows
+        inter = np.zeros((m, d, 1))
+        lin = np.broadcast_to(np.eye(d), (m, d, d))
+        # quadratic block: d(x_a x_b)/dx_j = x_b[j=a] + x_a[j=b] (2 x_a when a == b)
+        pairs = self._pairs(d)
+        quad = np.zeros((m, d, len(pairs)))
+        for c, (a, b) in enumerate(pairs):
+            if a == b:
+                quad[:, a, c] = 2 * X[:, a]
+            else:
+                quad[:, a, c] = X[:, b]
+                quad[:, b, c] = X[:, a]
+        return np.concatenate([inter, lin, quad], axis=2)
