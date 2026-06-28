@@ -30,7 +30,9 @@ jobs:
           # the package plus the [examples] extra (matplotlib) the usage smoke test needs
           pip install -e ".[examples]"
           # pin the quality tools so the gate is reproducible across runs
-          pip install "ruff==0.15.18" "mypy==2.1.0" "pytest==9.1.0" pytest-xdist pytest-cov
+          # threadpoolctl lets conftest.py pin BLAS to 1 thread at runtime (tiny-matrix
+          # fits thrash on a multithreaded BLAS); without it conftest falls back to env vars
+          pip install "ruff==0.15.18" "mypy==2.1.0" "pytest==9.1.0" pytest-xdist pytest-cov threadpoolctl
           pip install "git+https://github.com/anyoptimization/pyclawd.git"
 
       - name: Environment health check
