@@ -27,9 +27,9 @@ Usage
     
     import numpy as np
 
-    from pydacefit.corr import corr_gauss, corr_cubic, corr_exp, corr_expg, corr_spline, corr_spherical
-    from pydacefit.dace import DACE, regr_linear, regr_quadratic
-    from pydacefit.regr import regr_constant
+    from pydacefit.corr import Gaussian, Cubic, Exponential, GeneralizedExponential, Spline, Spherical
+    from pydacefit.dace import DACE
+    from pydacefit.regr import ConstantRegression, LinearRegression, QuadraticRegression
 
     import matplotlib.pyplot as plt
 
@@ -37,21 +37,22 @@ Usage
     # Different ways of initialization
     # -----------------------------------------------
 
-    # regression can be: regr_constant, regr_linear or regr_quadratic
-    regression = regr_constant
-    # regression = regr_linear
-    # regression = regr_quadratic
+    # kernels and trends are first-class objects -- pass an instance directly.
+    # regression can be: ConstantRegression(), LinearRegression() or QuadraticRegression()
+    regression = ConstantRegression()
+    # regression = LinearRegression()
+    # regression = QuadraticRegression()
 
 
     # then define the correlation (all possible correlations are shown below)
     # please have a look at the MATLAB document for more details
-    correlation = corr_gauss
-    # correlation = corr_cubic
-    # correlation = corr_exp
-    # correlation = corr_expg
-    # correlation = corr_spline
-    # correlation = corr_spherical
-    # correlation = corr_cubic
+    correlation = Gaussian()
+    # correlation = Cubic()
+    # correlation = Exponential()
+    # correlation = GeneralizedExponential()
+    # correlation = Spline()
+    # correlation = Spherical()
+    # correlation = RationalQuadratic(alpha=0.5)   # alpha is a fixed shape parameter
 
 
     # This initializes a DACEFIT objective using the provided regression and correlation

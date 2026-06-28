@@ -1,38 +1,14 @@
-"""L-BFGS-B optimizer with an analytic theta-gradient (exact for the gaussian kernel)."""
+"""L-BFGS-B optimizer with an analytic theta-gradient (when the kernel provides one)."""
 
 import numpy as np
 from scipy.optimize import minimize  # type: ignore[import-untyped]
 
-from pydacefit import corr as _corr
-from pydacefit.fit import fit
+from pydacefit.fit import DaceFitError, fit
 from pydacefit.optimizers.base import Optimizer, fit_feasible
 
 # returned by a failed fit so the gradient-based optimizer sees a large but finite
 # penalty (np.inf breaks finite-difference gradients) and steps away from it.
 _INFEASIBLE = 1e25
-
-
-def theta_grad_func(kernel):
-    """Look up a kernel's analytic theta-gradient, or None if it has none.
-
-    Mirrors ``dace.get_gradient_func``: callable kernels may carry their own
-    ``theta_grad``; plain-function kernels expose it as ``<name>_theta_grad`` in the
-    corr module (e.g. ``corr_gauss`` -> ``corr_gauss_theta_grad``).
-
-    Parameters
-    ----------
-    kernel : callable
-        The correlation function configured on the model.
-
-    Returns
-    -------
-    callable or None
-        The (D, theta) -> per-pair, per-theta derivative function, or None.
-    """
-    own = getattr(kernel, "theta_grad", None)
-    if callable(own):
-        return own
-    return getattr(_corr, getattr(kernel, "__name__", "") + "_theta_grad", None)
 
 
 def objective_gradient(nX, model, theta, grad_func):
@@ -87,7 +63,7 @@ class LBFGS(Optimizer):
 
     A *local* optimizer, the natural choice for ``refit``: from a warm start it
     converges in a few steps. When the kernel exposes an analytic theta-gradient
-    (see ``theta_grad_func``, available for ``corr_gauss``) it is used as the exact
+    (``kernel.has_theta_grad``; all shipped kernels do) it is used as the exact
     Jacobian -- this is what makes it fast; otherwise it falls back to scipy's
     finite-difference gradient.
 
@@ -118,28 +94,27 @@ class LBFGS(Optimizer):
     random_state : int or None
         Seed for the restart sampling, so multi-start fits are reproducible.
 
-    validation : tuple or None
-        Optional ``(X_val, Y_val)`` held-out set (see ``Optimizer``). When given,
-        theta is chosen by ranking the *entire* search history -- every theta the
-        gradient search evaluates is recorded (at no extra cost, since the objective
-        already fits a model there) and the one with the lowest held-out error is
-        kept. So selection is meaningful even with ``n_restarts=0``, where a single
-        descent still visits many thetas. The MLE path is unaffected: with no
-        validation set the best per-restart optimum is returned, exactly as before.
+    The held-out set is passed to ``optimize`` (by ``DACE.fit``), not to the
+    constructor. When given, theta is chosen by ranking the *entire* search history --
+    every theta the gradient search evaluates is recorded (at no extra cost, since the
+    objective already fits a model there) and the one with the lowest held-out error is
+    kept. So selection is meaningful even with ``n_restarts=0``, where a single descent
+    still visits many thetas. The MLE path is unaffected: with no validation set the
+    best per-restart optimum is returned, exactly as before.
     """
 
-    def __init__(self, gtol=1e-3, ftol=1e-6, n_restarts=0, random_state=0, validation=None):
-        super().__init__(validation=validation)
+    def __init__(self, gtol=1e-3, ftol=1e-6, n_restarts=0, random_state=0):
+        super().__init__()
         self.gtol = gtol
         self.ftol = ftol
         self.n_restarts = n_restarts
         self.random_state = random_state
 
-    def optimize(self, dace):
+    def optimize(self, dace, validation=None):
         """Run L-BFGS-B from the (warm) start plus any restarts; return ``(best_model, None)``."""
         nX, nY = dace.model["nX"], dace.model["nY"]
         regr, kernel = dace.regr, dace.kernel
-        grad_func = theta_grad_func(kernel)
+        grad_func = kernel.theta_grad if kernel.has_theta_grad else None
         options = {"gtol": self.gtol, "ftol": self.ftol}
 
         # bring theta and bounds to a common 1d shape (broadcast scalar bounds)
@@ -153,7 +128,7 @@ class LBFGS(Optimizer):
         # each evaluated feasible model. fun already fits at every theta -- recording
         # is just keeping that model instead of discarding it (zero extra fits). For
         # the MLE path we never look at the history, so don't pay the memory.
-        record = self.validation is not None
+        record = validation is not None
         history = []
 
         # objective (+ analytic gradient when the kernel provides one)
@@ -162,8 +137,8 @@ class LBFGS(Optimizer):
             def fun(t):
                 t = np.array(t, dtype=float)
                 try:
-                    model = fit(nX, nY, regr, kernel, t)
-                except Exception:
+                    model = fit(nX, nY, regr, kernel, t, noise=dace.noise)
+                except DaceFitError:
                     return _INFEASIBLE, np.zeros_like(t)
                 if record:
                     history.append(model)
@@ -174,8 +149,8 @@ class LBFGS(Optimizer):
 
             def fun(t):
                 try:
-                    model = fit(nX, nY, regr, kernel, np.array(t, dtype=float))
-                except Exception:
+                    model = fit(nX, nY, regr, kernel, np.array(t, dtype=float), noise=dace.noise)
+                except DaceFitError:
                     return _INFEASIBLE
                 if record:
                     history.append(model)
@@ -184,14 +159,17 @@ class LBFGS(Optimizer):
             jac = False
 
         # the first start is always the (warm) configured theta; the rest are random
+        # log-uniform within the bounds. Floor the lower bound away from zero first:
+        # DACE's default thetaL is 0.0, and log10(0) = -inf would make every restart NaN.
         starts = [theta0]
         if self.n_restarts > 0:
             rng = np.random.default_rng(self.random_state)
+            lo_pos = np.maximum(lo, 1e-12)
             for _ in range(self.n_restarts):
-                starts.append(10.0 ** rng.uniform(np.log10(lo), np.log10(up)))
+                starts.append(10.0 ** rng.uniform(np.log10(lo_pos), np.log10(up)))
 
         # build a model at each restart's converged theta (fit_feasible also applies
-        # the shared feasibility / raise_error safety net). For n_restarts=0 this is a
+        # the shared feasibility / max_noise safety net). For n_restarts=0 this is a
         # single start, as before.
         optima = []
         for s in starts:
@@ -205,4 +183,4 @@ class LBFGS(Optimizer):
         # ranks the FULL recorded search history, so it chooses among every theta the
         # gradient search visited (like Boxmin), not just the per-restart optima --
         # which means selection is meaningful even when n_restarts=0.
-        return self._select(dace, history if record else optima), None
+        return self._select(dace, history if record else optima, validation), None

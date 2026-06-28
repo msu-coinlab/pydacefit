@@ -28,8 +28,8 @@ It is the best *all-rounder*: lowest mean Friedman rank on both the 7- and
 11-function suites, lowest mean NRMSE, and a worst case ≤ 0.99 (it never does worse
 than predicting the mean on any problem). RQ is an infinite scale-mixture of
 Gaussians, so it models smooth and rough structure at once; heavy tails (small α)
-add robustness. It is **not** in pydacefit yet — `corr_gauss`/`corr_expg` are the
-closest shipped kernels (`expg` is the best of the built-ins).
+add robustness. It ships as `RationalQuadratic(alpha=...)`; among the fixed-exponent
+kernels `Gaussian`/`GeneralizedExponential` are the closest (`expg` is the best of those).
 
 ```
 config       mean_rank  mean_NRMSE   worst   avg gap vs per-problem oracle

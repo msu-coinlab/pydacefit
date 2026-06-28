@@ -5,35 +5,34 @@ import numpy as np
 
 # the full menu of selectable kernels and regressions (see the commented options below)
 from pydacefit.corr import (  # noqa: F401
-    corr_cubic,
-    corr_exp,
-    corr_expg,
-    corr_gauss,
-    corr_spherical,
-    corr_spline,
+    Cubic,
+    Exponential,
+    Gaussian,
+    GeneralizedExponential,
+    Spherical,
+    Spline,
 )
 from pydacefit.dace import DACE
-from pydacefit.regr import regr_constant, regr_linear, regr_quadratic  # noqa: F401
+from pydacefit.regr import ConstantRegression, LinearRegression, QuadraticRegression  # noqa: F401
 
 # -----------------------------------------------
 # Different ways of initialization
 # -----------------------------------------------
 
-# regression can be: regr_constant, regr_linear or regr_quadratic
-regression = regr_constant
-# regression = regr_linear
-# regression = regr_quadratic
+# regression can be: ConstantRegression(), LinearRegression() or QuadraticRegression()
+regression = ConstantRegression()
+# regression = LinearRegression()
+# regression = QuadraticRegression()
 
 
 # then define the correlation (all possible correlations are shown below)
 # please have a look at the MATLAB document for more details
-correlation = corr_gauss
-# correlation = corr_cubic
-# correlation = corr_exp
-# correlation = corr_expg
-# correlation = corr_spline
-# correlation = corr_spherical
-# correlation = corr_cubic
+correlation = Gaussian()
+# correlation = Cubic()
+# correlation = Exponential()
+# correlation = GeneralizedExponential()
+# correlation = Spline()
+# correlation = Spherical()
 
 
 # This initializes a DACEFIT objective using the provided regression and correlation
@@ -69,7 +68,7 @@ dacefit.fit(X, F)
 
 # predict values for plotting
 _X = np.linspace(0, 1, 100)[:, None]
-_F = dacefit.predict(_X)
+_F = dacefit.predict(_X).y
 
 # -----------------------------------------------
 # Plot the results

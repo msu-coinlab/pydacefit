@@ -2,7 +2,7 @@
 
 import numpy as np
 
-from pydacefit.fit import fit
+from pydacefit.fit import DaceFitError, fit
 from pydacefit.optimizers.base import Optimizer, fit_feasible
 
 
@@ -14,7 +14,7 @@ class Boxmin(Optimizer):
     and the full search trajectory (``itpar``).
     """
 
-    def optimize(self, dace):
+    def optimize(self, dace, validation=None):
         """Run the pattern search; return ``(best_model, itpar)``."""
         itpar = _start(dace)
         model = itpar["models"][-1]
@@ -33,7 +33,7 @@ class Boxmin(Optimizer):
         # objective). The final pick re-ranks every feasible theta the search
         # visited: with no validation set this returns that same MLE optimum, so
         # behavior is unchanged; with one it returns the best on the held-out set.
-        itpar["best"] = self._select(dace, itpar["models"])
+        itpar["best"] = self._select(dace, itpar["models"], validation)
 
         return itpar["best"], itpar
 
@@ -86,12 +86,14 @@ def _start(dace):
 
 
 def _evaluate_and_set_best(tt, dace, itpar):
-    # evaluate the model and append; a non-PD theta is infeasible -> infinite objective
+    # evaluate the model and append; a non-PD theta is infeasible -> infinite objective.
+    # The search carries the deliberate noise but does NOT climb (max_noise defaults 0):
+    # a theta that is non-PD at that noise is rejected, not papered over.
     try:
-        model = fit(dace.model["nX"], dace.model["nY"], dace.regr, dace.kernel, tt)
+        model = fit(dace.model["nX"], dace.model["nY"], dace.regr, dace.kernel, tt, noise=dace.noise)
         itpar["models"].append(model)
 
-    except Exception:
+    except DaceFitError:
         itpar["models"].append({"theta": tt, "obj": np.inf})
         return False
 

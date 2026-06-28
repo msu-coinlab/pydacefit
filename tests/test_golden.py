@@ -11,17 +11,17 @@ import numpy as np
 import pytest
 
 from pydacefit.corr import (
-    corr_cubic,
-    corr_exp,
-    corr_expg,
-    corr_gauss,
-    corr_lin,
-    corr_rq,
-    corr_spherical,
-    corr_spline,
+    Cubic,
+    Exponential,
+    Gaussian,
+    GeneralizedExponential,
+    Linear,
+    RationalQuadratic,
+    Spherical,
+    Spline,
 )
 from pydacefit.dace import DACE
-from pydacefit.regr import regr_constant, regr_linear, regr_quadratic
+from pydacefit.regr import ConstantRegression, LinearRegression, QuadraticRegression
 
 
 def _data():
@@ -44,22 +44,23 @@ _EXPG_OPT = dict(theta=np.array([0.5, 2.0]), thetaL=np.array([0.05, 1.0]), theta
 
 # (id, regr, corr, params) — chosen to cover every kernel x regression x path x theta-form
 CASES = [
-    ("gauss/const/opt-scalar", regr_constant, corr_gauss, _OPT),
-    ("gauss/linear/noopt", regr_linear, corr_gauss, _NOOPT),
-    ("gauss/quad/opt-scalar", regr_quadratic, corr_gauss, _OPT),
-    ("gauss/const/opt-ard", regr_constant, corr_gauss, _ARD),
-    ("exp/const/opt-scalar", regr_constant, corr_exp, _OPT),
-    ("exp/linear/noopt", regr_linear, corr_exp, _NOOPT),
-    ("cubic/const/opt-scalar", regr_constant, corr_cubic, _OPT),
-    ("cubic/quad/noopt", regr_quadratic, corr_cubic, _NOOPT),
-    ("spline/const/noopt", regr_constant, corr_spline, _NOOPT),
-    ("spherical/const/opt-ard", regr_constant, corr_spherical, _ARD),
-    ("spherical/linear/opt-scalar", regr_linear, corr_spherical, _OPT),
-    ("lin/quad/noopt", regr_quadratic, corr_lin, _NOOPT),
-    ("expg/const/noopt", regr_constant, corr_expg, _EXPG),
-    ("expg/const/opt-ard", regr_constant, corr_expg, _EXPG_OPT),
-    ("rq/const/opt-scalar", regr_constant, corr_rq, _OPT),
-    ("rq/quad/opt-ard", regr_quadratic, corr_rq, _ARD),
+    ("gauss/const/opt-scalar", ConstantRegression(), Gaussian(), _OPT),
+    ("gauss/linear/noopt", LinearRegression(), Gaussian(), _NOOPT),
+    ("gauss/quad/opt-scalar", QuadraticRegression(), Gaussian(), _OPT),
+    ("gauss/const/opt-ard", ConstantRegression(), Gaussian(), _ARD),
+    ("exp/const/opt-scalar", ConstantRegression(), Exponential(), _OPT),
+    ("exp/linear/noopt", LinearRegression(), Exponential(), _NOOPT),
+    ("cubic/const/opt-scalar", ConstantRegression(), Cubic(), _OPT),
+    ("cubic/quad/noopt", QuadraticRegression(), Cubic(), _NOOPT),
+    ("spline/const/noopt", ConstantRegression(), Spline(), _NOOPT),
+    ("spherical/const/opt-ard", ConstantRegression(), Spherical(), _ARD),
+    ("spherical/linear/opt-scalar", LinearRegression(), Spherical(), _OPT),
+    ("lin/quad/noopt", QuadraticRegression(), Linear(), _NOOPT),
+    ("expg/const/noopt", ConstantRegression(), GeneralizedExponential(), _EXPG),
+    ("expg/const/opt-ard", ConstantRegression(), GeneralizedExponential(), _EXPG_OPT),
+    # pin alpha explicitly so the baseline is independent of the RQ default (now 0.25)
+    ("rq/const/opt-scalar", ConstantRegression(), RationalQuadratic(alpha=1.0), _OPT),
+    ("rq/quad/opt-ard", QuadraticRegression(), RationalQuadratic(alpha=1.0), _ARD),
 ]
 
 
@@ -70,12 +71,12 @@ def test_predict(name, regr, corr, params):
     model = DACE(regr=regr, corr=corr, **params)
     model.fit(x_train, f_train)
 
-    pred, mse, grad = model.predict(x_test, return_mse=True, return_gradient=True)
+    p = model.predict(x_test, mse=True, grad=True)
 
     snapshot = {
-        "pred": pred.ravel(),
-        "mse": mse.ravel(),
-        "grad": grad.ravel(),
+        "pred": p.y.ravel(),
+        "mse": p.mse.ravel(),
+        "grad": p.grad.ravel(),
         "theta": np.asarray(model.model["theta"]).ravel(),
     }
     # for the optimization path also pin the full theta search trajectory

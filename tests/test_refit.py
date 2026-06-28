@@ -3,10 +3,10 @@
 import numpy as np
 import pytest
 
-from pydacefit.corr import corr_gauss
+from pydacefit.corr import Gaussian
 from pydacefit.dace import DACE
 from pydacefit.optimizers import LBFGS, Boxmin, Fixed
-from pydacefit.regr import regr_constant
+from pydacefit.regr import ConstantRegression
 
 
 def _fun(X):
@@ -14,7 +14,9 @@ def _fun(X):
 
 
 def _model(theta=1.0, thetaL=1e-5, thetaU=100.0, optimizer=None):
-    return DACE(regr=regr_constant, corr=corr_gauss, theta=theta, thetaL=thetaL, thetaU=thetaU, optimizer=optimizer)
+    return DACE(
+        regr=ConstantRegression(), corr=Gaussian(), theta=theta, thetaL=thetaL, thetaU=thetaU, optimizer=optimizer
+    )
 
 
 def test_refit_before_fit_raises():
@@ -25,8 +27,10 @@ def test_refit_before_fit_raises():
 
 
 def test_refit_appends_and_matches_cold_fit_on_combined_data():
-    # refit takes only the new points; the result must equal a cold fit on the
-    # full combined set (warm starting changes the path, not the destination).
+    # refit takes only the new points; an MLE refit (validation=False) with the same
+    # optimizer must equal a cold fit on the full combined set -- warm starting changes
+    # the path, not the destination. (The refit *defaults* differ -- warm LBFGS +
+    # validation=True -- so this round-trip opts back into the cold fit's semantics.)
     rng = np.random.default_rng(0)
     X0 = rng.random((15, 1))
     X_new = rng.random((10, 1))
@@ -37,10 +41,10 @@ def test_refit_appends_and_matches_cold_fit_on_combined_data():
 
     warm = _model()
     warm.fit(X0, _fun(X0))
-    warm.refit(X_new, _fun(X_new))  # only the additions
+    warm.refit(X_new, _fun(X_new), optimizer=Boxmin(), validation=False)  # only the additions
 
     x_test = np.linspace(0, 1, 50)[:, None]
-    assert np.allclose(cold.predict(x_test), warm.predict(x_test), atol=1e-5)
+    assert np.allclose(cold.predict(x_test).y, warm.predict(x_test).y, atol=1e-5)
 
 
 def test_refit_grows_the_stored_training_set():
@@ -81,14 +85,14 @@ def test_refit_fixed_optimizer_freezes_theta_but_uses_new_data():
     theta_before = model.model["theta"].copy()
 
     x_test = np.linspace(0, 1, 30)[:, None]
-    pred_before = model.predict(x_test)
+    pred_before = model.predict(x_test).y
 
     X_new = rng.random((6, 1))
     model.refit(X_new, _fun(X_new), optimizer=Fixed())
 
     assert np.allclose(model.model["theta"], theta_before)  # theta frozen
     assert model.model["X"].shape[0] == 18  # data still appended
-    assert not np.allclose(pred_before, model.predict(x_test))  # fit changed
+    assert not np.allclose(pred_before, model.predict(x_test).y)  # fit changed
 
 
 def test_refit_optimizer_override_is_per_call():
@@ -118,7 +122,7 @@ def test_refit_with_lbfgs_override_produces_valid_fit():
     assert model.model["X"].shape[0] == 23
     theta = np.ravel(model.model["theta"])
     assert np.all((theta >= 1e-5) & (theta <= 100.0))
-    assert np.all(np.isfinite(model.predict(np.linspace(0, 1, 40)[:, None])))
+    assert np.all(np.isfinite(model.predict(np.linspace(0, 1, 40)[:, None]).y))
 
 
 def test_lbfgs_as_configured_optimizer():
@@ -128,7 +132,7 @@ def test_lbfgs_as_configured_optimizer():
     model = _model(optimizer=LBFGS())
     model.fit(X0, _fun(X0))
     assert model.itpar is None  # lbfgs leaves no boxmin trajectory
-    pred = model.predict(np.linspace(0, 1, 10)[:, None])
+    pred = model.predict(np.linspace(0, 1, 10)[:, None]).y
     assert np.all(np.isfinite(pred))
 
 
@@ -136,7 +140,7 @@ def test_refit_without_optimization_reuses_theta():
     # no bounds -> no hyperparameter search; refit keeps the last theta.
     rng = np.random.default_rng(2)
     X0 = rng.random((10, 1))
-    model = DACE(regr=regr_constant, corr=corr_gauss, theta=2.0, thetaL=None, thetaU=None)
+    model = DACE(regr=ConstantRegression(), corr=Gaussian(), theta=2.0, thetaL=None, thetaU=None)
     model.fit(X0, _fun(X0))
 
     X_new = rng.random((5, 1))

@@ -10,13 +10,13 @@ baseline; a contract is the right, portable thing to assert instead.
 import numpy as np
 import pytest
 
-from pydacefit.corr import corr_gauss
+from pydacefit.corr import Gaussian
 from pydacefit.dace import DACE
-from pydacefit.regr import regr_constant, regr_quadratic
+from pydacefit.regr import ConstantRegression, QuadraticRegression
 
 
-def _model(regr=regr_constant, theta=0.5, thetaL=None, thetaU=None):
-    return DACE(regr=regr, corr=corr_gauss, theta=theta, thetaL=thetaL, thetaU=thetaU)
+def _model(regr=ConstantRegression(), theta=0.5, thetaL=None, thetaU=None):
+    return DACE(regr=regr, corr=Gaussian(), theta=theta, thetaL=thetaL, thetaU=thetaU)
 
 
 def _line(n=10):
@@ -33,34 +33,39 @@ def test_mismatched_rows_raises():
         _model().fit(x, y[:5])
 
 
-def test_mse_gradient_without_prerequisites_raises():
-    x, y = _line()
-    model = _model()
-    model.fit(x, y)
-    with pytest.raises(Exception, match="gradient and MSE"):
-        model.predict(np.array([[0.5]]), return_mse_gradient=True)
-
-
 def test_single_sample_is_not_silently_fit():
     # one point cannot support a regression + GP fit; the exact failure mode is
     # BLAS-dependent, so only assert it fails loudly instead of returning a number.
     with pytest.raises(Exception):
         model = _model()
         model.fit(np.zeros((1, 1)), np.zeros(1))
-        model.predict(np.array([[0.5]]))
+        model.predict(np.array([[0.5]])).y
 
 
-# --- documented "not implemented": the MSE-gradient is a NaN placeholder ---
+# --- zero-variance data: degrade gracefully to a constant, never silent NaN ---
 
 
-def test_mse_gradient_is_nan_placeholder():
-    x, y = _line()
+def test_constant_target_returns_the_constant():
+    # a constant Y has zero std -> normalization used to divide by zero and silently
+    # return NaN. It must now degrade to a constant predictor: the constant everywhere.
+    x, _ = _line()
+    y = np.full(x.shape[0], 3.5)
     model = _model()
     model.fit(x, y)
-    x_test = np.array([[0.3], [0.6]])
-    _, _, _, mse_grad = model.predict(x_test, return_mse=True, return_gradient=True, return_mse_gradient=True)
-    assert mse_grad.shape == (2, 1)
-    assert np.all(np.isnan(mse_grad))
+    pred = model.predict(np.linspace(0, 1, 5)[:, None]).y
+    assert np.all(np.isfinite(pred))
+    assert np.allclose(pred, 3.5)
+
+
+def test_constant_input_column_does_not_poison_the_fit():
+    # a constant X column has zero variance too; it must not produce NaN
+    x = np.linspace(0, 1, 10)[:, None]
+    X = np.hstack([x, np.full((10, 1), 0.5)])  # second column constant
+    y = np.sin(x[:, 0] * 6.0)
+    model = _model()
+    model.fit(X, y)
+    Xt = np.hstack([np.linspace(0, 1, 4)[:, None], np.full((4, 1), 0.5)])
+    assert np.all(np.isfinite(model.predict(Xt).y))
 
 
 # --- robustness: near-singular but jitter-stabilized -> finite, correct shape ---
@@ -78,7 +83,7 @@ def _case_duplicate_points():
 def _case_collinear_quadratic():
     X = np.linspace(0, 1, 12)[:, None] * np.ones((1, 2))
     y = np.sin(X[:, 0] * 6.0)
-    model = _model(regr=regr_quadratic)
+    model = _model(regr=QuadraticRegression())
     model.fit(X, y)
     return model, np.linspace(0, 1, 4)[:, None] * np.ones((1, 2))
 
@@ -97,6 +102,6 @@ def _case_tiny_theta():
 )
 def test_ill_conditioned_returns_finite(build):
     model, x_test = build()
-    pred = model.predict(x_test)
+    pred = model.predict(x_test).y
     assert pred.shape == (x_test.shape[0], 1)
     assert np.all(np.isfinite(pred))

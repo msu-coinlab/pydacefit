@@ -2,11 +2,15 @@
 
 import numpy as np
 
-from pydacefit.corr import corr_gauss, corr_gauss_theta_grad
+from pydacefit.corr import Correlation, Gaussian
 from pydacefit.dace import DACE
 from pydacefit.fit import fit
-from pydacefit.optimizers import LBFGS, objective_gradient, theta_grad_func
-from pydacefit.regr import regr_constant
+from pydacefit.optimizers import LBFGS, objective_gradient
+from pydacefit.regr import ConstantRegression
+
+# shared stateless instances (kernels/trends carry no fit state)
+GAUSS = Gaussian()
+CONSTANT = ConstantRegression()
 
 
 def _standardized(seed, d, n=18):
@@ -20,7 +24,7 @@ def _standardized(seed, d, n=18):
 
 
 def _obj(nX, nY, theta):
-    return fit(nX, nY, regr_constant, corr_gauss, theta)["f"]
+    return fit(nX, nY, CONSTANT, GAUSS, theta)["f"]
 
 
 def _fd_grad(nX, nY, theta, eps=1e-6):
@@ -40,12 +44,12 @@ def _fd_grad(nX, nY, theta, eps=1e-6):
 
 def test_gauss_isotropic_gradient_matches_finite_difference():
     # multi-dim input with a single (length-1) theta -> exercises the sum-over-dims
-    # isotropic branch of corr_gauss_theta_grad.
+    # isotropic branch of Gaussian.theta_grad.
     nX, nY = _standardized(0, 3)
     theta = np.array([0.7])
-    model = fit(nX, nY, regr_constant, corr_gauss, theta)
+    model = fit(nX, nY, CONSTANT, GAUSS, theta)
 
-    analytic = objective_gradient(nX, model, theta, corr_gauss_theta_grad)
+    analytic = objective_gradient(nX, model, theta, GAUSS.theta_grad)
     finite = _fd_grad(nX, nY, theta)
 
     assert analytic.shape == (1,)
@@ -56,9 +60,9 @@ def test_gauss_ard_gradient_matches_finite_difference():
     # vector theta (one per input dim) -> per-dim ARD branch.
     nX, nY = _standardized(1, 3)
     theta = np.array([0.5, 1.3, 0.9])
-    model = fit(nX, nY, regr_constant, corr_gauss, theta)
+    model = fit(nX, nY, CONSTANT, GAUSS, theta)
 
-    analytic = objective_gradient(nX, model, theta, corr_gauss_theta_grad)
+    analytic = objective_gradient(nX, model, theta, GAUSS.theta_grad)
     finite = _fd_grad(nX, nY, theta)
 
     assert analytic.shape == (3,)
@@ -69,22 +73,26 @@ def test_gradient_matches_fd_across_several_thetas():
     # robustness: the match must hold away from any one lucky point.
     nX, nY = _standardized(4, 2)
     for theta in (np.array([0.2, 0.2]), np.array([1.0, 3.0]), np.array([5.0, 0.4])):
-        model = fit(nX, nY, regr_constant, corr_gauss, theta)
-        analytic = objective_gradient(nX, model, theta, corr_gauss_theta_grad)
+        model = fit(nX, nY, CONSTANT, GAUSS, theta)
+        analytic = objective_gradient(nX, model, theta, GAUSS.theta_grad)
         finite = _fd_grad(nX, nY, theta)
         assert np.allclose(analytic, finite, rtol=1e-4, atol=1e-6), theta
 
 
-# --- the lookup wiring ---
+# --- the analytic-gradient detection wiring ---
 
 
-def test_theta_grad_func_resolves_gauss_and_misses_unknown():
-    assert theta_grad_func(corr_gauss) is corr_gauss_theta_grad
+def test_kernel_reports_whether_it_has_an_analytic_theta_grad():
+    # the kernel answers for itself now (no free helper): Gaussian provides one...
+    assert GAUSS.has_theta_grad is True
 
-    def corr_made_up(D, theta):
-        return np.ones(D.shape[0])
+    # ...a kernel that implements neither hook inherits the raising base, so it reports
+    # False and LBFGS falls back to scipy's numeric gradient instead.
+    class MadeUp(Correlation):
+        def __call__(self, D, theta):
+            return np.ones(D.shape[0])
 
-    assert theta_grad_func(corr_made_up) is None  # falls back to numeric gradient
+    assert MadeUp().has_theta_grad is False
 
 
 # --- end-to-end L-BFGS-B with the analytic gradient ---
@@ -98,8 +106,8 @@ def test_lbfgs_improves_objective_and_converges_interior():
     lo, up = 1e-4, 50.0
     # tight tolerance here so the gradient-at-optimum assertion is meaningful
     model = DACE(
-        regr=regr_constant,
-        corr=corr_gauss,
+        regr=CONSTANT,
+        corr=GAUSS,
         theta=np.array([1.0, 1.0]),
         thetaL=[lo, lo],
         thetaU=[up, up],
@@ -108,15 +116,15 @@ def test_lbfgs_improves_objective_and_converges_interior():
     model.fit(X, y)
 
     # the optimum must not be worse than the start point
-    start_obj = fit(model.model["nX"], model.model["nY"], regr_constant, corr_gauss, np.array([1.0, 1.0]))["f"]
+    start_obj = fit(model.model["nX"], model.model["nY"], CONSTANT, GAUSS, np.array([1.0, 1.0]))["f"]
     assert model.model["f"] <= start_obj + 1e-9
 
     # for theta components strictly inside the bounds, the gradient must be ~0
     theta = np.ravel(model.model["theta"])
-    grad = objective_gradient(model.model["nX"], model.model, theta, corr_gauss_theta_grad)
+    grad = objective_gradient(model.model["nX"], model.model, theta, GAUSS.theta_grad)
     interior = (theta > lo * 1.01) & (theta < up * 0.99)
     assert np.all(np.abs(grad[interior]) < 1e-3)
-    assert np.all(np.isfinite(model.predict(rng.random((5, 2)))))
+    assert np.all(np.isfinite(model.predict(rng.random((5, 2))).y))
 
 
 def test_relaxed_lbfgs_saves_evaluations_and_stays_close():
@@ -130,8 +138,8 @@ def test_relaxed_lbfgs_saves_evaluations_and_stays_close():
 
     def _build(optimizer):
         return DACE(
-            regr=regr_constant,
-            corr=corr_gauss,
+            regr=CONSTANT,
+            corr=GAUSS,
             theta=np.array([1.0, 1.0]),
             thetaL=[1e-4, 1e-4],
             thetaU=[50.0, 50.0],
@@ -169,13 +177,13 @@ def test_lbfgs_matches_boxmin_when_optimum_is_unique():
     X = rng.random((20, 1))
     y = np.sum(np.sin(X * 2 * np.pi), axis=1)
 
-    box = DACE(regr=regr_constant, corr=corr_gauss, theta=1.0, thetaL=1e-4, thetaU=100.0)
+    box = DACE(regr=CONSTANT, corr=GAUSS, theta=1.0, thetaL=1e-4, thetaU=100.0)
     box.fit(X, y)
-    lb = DACE(regr=regr_constant, corr=corr_gauss, theta=1.0, thetaL=1e-4, thetaU=100.0, optimizer=LBFGS())
+    lb = DACE(regr=CONSTANT, corr=GAUSS, theta=1.0, thetaL=1e-4, thetaU=100.0, optimizer=LBFGS())
     lb.fit(X, y)
 
     xt = np.linspace(0, 1, 40)[:, None]
-    assert np.allclose(box.predict(xt), lb.predict(xt), atol=1e-2)
+    assert np.allclose(box.predict(xt).y, lb.predict(xt).y, atol=1e-2)
 
 
 def test_lbfgs_restarts_escape_a_bad_starting_basin():
@@ -187,11 +195,11 @@ def test_lbfgs_restarts_escape_a_bad_starting_basin():
     y = np.sin(X[:, 0] * 12.0)
 
     bad_start = 1e-4  # the lower bound -> single start cannot move off the plateau
-    single = DACE(regr=regr_constant, corr=corr_gauss, theta=bad_start, thetaL=1e-4, thetaU=100.0, optimizer=LBFGS())
+    single = DACE(regr=CONSTANT, corr=GAUSS, theta=bad_start, thetaL=1e-4, thetaU=100.0, optimizer=LBFGS())
     single.fit(X, y)
 
     restarts = DACE(
-        regr=regr_constant, corr=corr_gauss, theta=bad_start, thetaL=1e-4, thetaU=100.0, optimizer=LBFGS(n_restarts=12)
+        regr=CONSTANT, corr=GAUSS, theta=bad_start, thetaL=1e-4, thetaU=100.0, optimizer=LBFGS(n_restarts=12)
     )
     restarts.fit(X, y)
 
@@ -208,11 +216,9 @@ def test_lbfgs_first_start_is_the_configured_theta():
     X = rng.random((20, 1))
     y = np.sum(np.sin(X * 2 * np.pi), axis=1)
 
-    plain = DACE(regr=regr_constant, corr=corr_gauss, theta=1.0, thetaL=1e-4, thetaU=100.0, optimizer=LBFGS())
+    plain = DACE(regr=CONSTANT, corr=GAUSS, theta=1.0, thetaL=1e-4, thetaU=100.0, optimizer=LBFGS())
     plain.fit(X, y)
-    multi = DACE(
-        regr=regr_constant, corr=corr_gauss, theta=1.0, thetaL=1e-4, thetaU=100.0, optimizer=LBFGS(n_restarts=5)
-    )
+    multi = DACE(regr=CONSTANT, corr=GAUSS, theta=1.0, thetaL=1e-4, thetaU=100.0, optimizer=LBFGS(n_restarts=5))
     multi.fit(X, y)
 
     # multi-start keeps the best, so it is never worse than the single warm start
@@ -223,12 +229,27 @@ def test_lbfgs_first_start_is_the_configured_theta():
 
 
 def test_list_theta_ard_fits_via_boxmin():
-    # regression: a list theta used to reach corr_gauss as a list and crash with
+    # regression: a list theta used to reach the kernel as a list and crash with
     # "bad operand type for unary -: 'list'"; __init__ now coerces it to an array.
     rng = np.random.default_rng(0)
     X = rng.random((20, 2))
     y = np.sum(np.sin(X * 3.0), axis=1)
 
-    model = DACE(regr=regr_constant, corr=corr_gauss, theta=[1.0, 1.0], thetaL=[1e-4, 1e-4], thetaU=[20.0, 20.0])
+    model = DACE(regr=CONSTANT, corr=GAUSS, theta=[1.0, 1.0], thetaL=[1e-4, 1e-4], thetaU=[20.0, 20.0])
     model.fit(X, y)
-    assert np.all(np.isfinite(model.predict(rng.random((4, 2)))))
+    assert np.all(np.isfinite(model.predict(rng.random((4, 2))).y))
+
+
+def test_lbfgs_restarts_handle_zero_lower_bound():
+    # regression: LBFGS(n_restarts>0) sampled starts as 10**uniform(log10(lo), ...),
+    # so DACE's default thetaL=0.0 gave log10(0)=-inf -> NaN starts. The lower bound
+    # is now floored away from zero, so restarts stay finite and the fit succeeds.
+    rng = np.random.default_rng(0)
+    X = rng.random((20, 1))
+    y = np.sum(np.sin(X * 3.0), axis=1)
+
+    model = DACE(regr=CONSTANT, corr=GAUSS, theta=1.0, optimizer=LBFGS(n_restarts=4))
+    model.fit(X, y)
+
+    assert np.all(np.isfinite(np.ravel(model.model["theta"])))
+    assert np.all(np.isfinite(model.predict(rng.random((5, 1))).y))

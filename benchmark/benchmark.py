@@ -21,16 +21,16 @@ import warnings
 import numpy as np
 
 from pydacefit.corr import (
-    corr_cubic,
-    corr_exp,
-    corr_expg,
-    corr_gauss,
-    corr_lin,
-    corr_spherical,
-    corr_spline,
+    Cubic,
+    Exponential,
+    Gaussian,
+    GeneralizedExponential,
+    Linear,
+    Spherical,
+    Spline,
 )
 from pydacefit.dace import DACE
-from pydacefit.regr import regr_constant, regr_linear, regr_quadratic
+from pydacefit.regr import ConstantRegression, LinearRegression, QuadraticRegression
 
 warnings.filterwarnings("ignore")  # silence ill-conditioned RuntimeWarnings during search
 
@@ -114,16 +114,16 @@ FUNCS = {
     "dixon_price": (dixon_price, -10.0, 10.0),
 }
 
-REGR = {"constant": regr_constant, "linear": regr_linear, "quadratic": regr_quadratic}
+REGR = {"constant": ConstantRegression(), "linear": LinearRegression(), "quadratic": QuadraticRegression()}
 
 KERNELS = {
-    "gauss": corr_gauss,
-    "exp": corr_exp,
-    "cubic": corr_cubic,
-    "spline": corr_spline,
-    "spherical": corr_spherical,
-    "lin": corr_lin,
-    "expg": corr_expg,
+    "gauss": Gaussian(),
+    "exp": Exponential(),
+    "cubic": Cubic(),
+    "spline": Spline(),
+    "spherical": Spherical(),
+    "lin": Linear(),
+    "expg": GeneralizedExponential(),
 }
 
 
@@ -171,7 +171,7 @@ def evaluate(func, lo, hi, d, n_train, n_test, configs):
         try:
             model = DACE(regr=REGR[rname], corr=KERNELS[kname], **_theta_config(kname, d, mode))
             model.fit(Xtr, ytr)
-            score = _nrmse(model.predict(Xte), yte)
+            score = _nrmse(model.predict(Xte).y, yte)
             results[(rname, kname, mode)] = score if np.isfinite(score) else None
         except Exception:
             results[(rname, kname, mode)] = None

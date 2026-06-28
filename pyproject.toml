@@ -1,5 +1,27 @@
-# Starter pyproject.toml written by `pyclawd new --scaffold-pyproject`.
-# This is a STARTER config — curate it per the pyclawd-adopt skill.
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pydacefit"
+version = "1.0.0"
+description = "Surrogate Toolbox for Python"
+readme = "README.rst"
+license = { text = "Apache License 2.0" }
+authors = [{ name = "Julian Blank", email = "blankjul@egr.msu.edu" }]
+keywords = ["metamodel", "surrogate", "response surface"]
+requires-python = ">=3.10"
+dependencies = ["numpy", "scipy"]
+
+[project.optional-dependencies]
+# matplotlib is only needed to run the plotting example (pydacefit/usage.py).
+examples = ["matplotlib"]
+
+[project.urls]
+Homepage = "https://github.com/msu-coinlab/pydacefit"
+
+[tool.setuptools.packages.find]
+exclude = ["tests*", "docs*", "benchmark*"]
 
 [tool.ruff]
 line-length = 120
