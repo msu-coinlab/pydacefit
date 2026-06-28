@@ -11,11 +11,11 @@ class Boxmin(Optimizer):
 
     Derivative-free and robust; it explores broadly from the start theta, which makes
     it the right default for a cold initial fit. ``optimize`` returns the best model
-    and the full search trajectory (``itpar``).
+    and the full search record (lands on ``DACE.optimization``).
     """
 
     def optimize(self, dace, validation=None):
-        """Run the pattern search; return ``(best_model, itpar)``."""
+        """Run the pattern search; return ``(best_model, optimization)``."""
         itpar = _start(dace)
         model = itpar["models"][-1]
         p, f = itpar["p"], model["f"]

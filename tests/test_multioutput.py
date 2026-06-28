@@ -101,7 +101,7 @@ def test_lbfgs_objective_gradient_matrix_Y_end_to_end():
         theta=np.array([1.0, 1.0]),
         thetaL=[1e-4, 1e-4],
         thetaU=[50.0, 50.0],
-        optimizer=LBFGS(gtol=1e-8, ftol=1e-12),
+        optimizer=LBFGS(options={"gtol": 1e-8, "ftol": 1e-12}),
     )
     model.fit(X, Y)
 

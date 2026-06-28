@@ -67,10 +67,11 @@ class LBFGS(Optimizer):
     Jacobian -- this is what makes it fast; otherwise it falls back to scipy's
     finite-difference gradient.
 
-    The defaults are deliberately *relaxed*: a warm-started refit already sits next
-    to the optimum, so chasing the last digits costs iterations without meaningfully
-    changing the model. Loosen further (``LBFGS(gtol=1e-2)``) to save more, or
-    tighten (``LBFGS(gtol=1e-8)``) when an exact optimum matters.
+    The default stop tolerances are deliberately *relaxed* (``gtol=1e-3``,
+    ``ftol=1e-6``): a warm-started refit already sits next to the optimum, so chasing
+    the last digits costs iterations without meaningfully changing the model. Loosen
+    further (``LBFGS(options={"gtol": 1e-2})``) to save more, or tighten
+    (``LBFGS(options={"gtol": 1e-8})``) when an exact optimum matters.
 
     The DACE likelihood is multi-modal, so a single local search can settle in a
     poor basin when started far from the optimum. ``n_restarts`` adds that many
@@ -81,18 +82,21 @@ class LBFGS(Optimizer):
 
     Parameters
     ----------
-    gtol : float
-        Stop once the max-norm of the projected gradient falls below this.
-
-    ftol : float
-        Stop once the relative objective improvement falls below this.
-
     n_restarts : int
         Number of additional random restarts (beyond the configured start) to guard
         against local optima. 0 (default) means a single start from the model theta.
 
     random_state : int or None
         Seed for the restart sampling, so multi-start fits are reproducible.
+
+    options : dict or None
+        Options forwarded to ``scipy.optimize.minimize(..., method="L-BFGS-B",
+        options=...)``. Any key the solver accepts works -- ``gtol``, ``ftol``,
+        ``maxiter``, ``maxfun``, ``eps``, ``maxcor``, ``maxls``. The defaults
+        ``{"gtol": 1e-3, "ftol": 1e-6, "maxfun": 100}`` apply relaxed stop tolerances
+        and cap the objective evaluations (the expensive O(n^3) fits) at a level that
+        only stops a runaway search; anything passed here overrides or extends them.
+        None (default) uses the defaults alone.
 
     The held-out set is passed to ``optimize`` (by ``DACE.fit``), not to the
     constructor. When given, theta is chosen by ranking the *entire* search history --
@@ -103,19 +107,24 @@ class LBFGS(Optimizer):
     best per-restart optimum is returned, exactly as before.
     """
 
-    def __init__(self, gtol=1e-3, ftol=1e-6, n_restarts=0, random_state=0):
+    def __init__(self, n_restarts=0, random_state=0, options=None):
         super().__init__()
-        self.gtol = gtol
-        self.ftol = ftol
         self.n_restarts = n_restarts
         self.random_state = random_state
+        # relaxed stop tolerances by default -- a warm-started refit already sits near
+        # the optimum. maxfun caps the number of objective evaluations, i.e. the actual
+        # expensive fit() calls (each an O(n^3) Cholesky): scipy's default is 15000, but
+        # LBFGS here converges in ~2-8 evals, so 100 is a large safety margin that only
+        # stops a runaway/non-converging search. Override or extend with any scipy
+        # L-BFGS-B option (gtol, ftol, maxiter, maxfun, eps, maxcor, maxls).
+        self.options = {"gtol": 1e-3, "ftol": 1e-6, "maxfun": 100, **(options or {})}
 
     def optimize(self, dace, validation=None):
-        """Run L-BFGS-B from the (warm) start plus any restarts; return ``(best_model, None)``."""
+        """Run L-BFGS-B from the (warm) start plus any restarts; return ``(best_model, optimization)``."""
         nX, nY = dace.model["nX"], dace.model["nY"]
         regr, kernel = dace.regr, dace.kernel
         grad_func = kernel.theta_grad if kernel.has_theta_grad else None
-        options = {"gtol": self.gtol, "ftol": self.ftol}
+        options = self.options
 
         # bring theta and bounds to a common 1d shape (broadcast scalar bounds)
         theta0 = np.atleast_1d(np.array(dace.theta, dtype=float))
@@ -172,10 +181,12 @@ class LBFGS(Optimizer):
         # the shared feasibility / max_noise safety net). For n_restarts=0 this is a
         # single start, as before.
         optima = []
+        results = []
         for s in starts:
             res = minimize(fun, s, method="L-BFGS-B", jac=jac, bounds=bounds, options=options)
             _, model = fit_feasible(dace, np.atleast_1d(res.x), relocate=True)
             optima.append(model)
+            results.append(res)
             if record:
                 history.append(model)
 
@@ -183,4 +194,19 @@ class LBFGS(Optimizer):
         # ranks the FULL recorded search history, so it chooses among every theta the
         # gradient search visited (like Boxmin), not just the per-restart optima --
         # which means selection is meaningful even when n_restarts=0.
-        return self._select(dace, history if record else optima, validation), None
+        models = history if record else optima
+        best = self._select(dace, models, validation)
+
+        # the optimization record (lands on DACE.optimization). "best"/"models" mirror
+        # Boxmin so trajectory consumers are uniform; "results" holds scipy's per-start
+        # OptimizeResult (success/message/x), and nit/nfev are the totals across starts.
+        optimization = {
+            "best": best,
+            "models": models,
+            "results": results,
+            "n_starts": len(starts),
+            "nit": int(sum(r.nit for r in results)),
+            "nfev": int(sum(r.nfev for r in results)),
+            "success": all(bool(r.success) for r in results),
+        }
+        return best, optimization

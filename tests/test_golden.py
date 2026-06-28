@@ -80,6 +80,6 @@ def test_predict(name, regr, corr, params):
         "theta": np.asarray(model.model["theta"]).ravel(),
     }
     # for the optimization path also pin the full theta search trajectory
-    if model.itpar is not None:
-        snapshot["theta_traj"] = np.stack([m["theta"] for m in model.itpar["models"]]).ravel()
+    if model.optimization is not None:
+        snapshot["theta_traj"] = np.stack([m["theta"] for m in model.optimization["models"]]).ravel()
     return snapshot

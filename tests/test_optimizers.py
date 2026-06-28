@@ -111,7 +111,7 @@ def test_lbfgs_improves_objective_and_converges_interior():
         theta=np.array([1.0, 1.0]),
         thetaL=[lo, lo],
         thetaU=[up, up],
-        optimizer=LBFGS(gtol=1e-8, ftol=1e-12),
+        optimizer=LBFGS(options={"gtol": 1e-8, "ftol": 1e-12}),
     )
     model.fit(X, y)
 
@@ -156,12 +156,12 @@ def test_relaxed_lbfgs_saves_evaluations_and_stays_close():
     lb.fit = counting
     try:
         calls[0] = 0
-        relaxed = _build(LBFGS(gtol=1e-2))
+        relaxed = _build(LBFGS(options={"gtol": 1e-2}))
         relaxed.fit(X, y)
         relaxed_evals = calls[0]
 
         calls[0] = 0
-        tight = _build(LBFGS(gtol=1e-9, ftol=1e-14))
+        tight = _build(LBFGS(options={"gtol": 1e-9, "ftol": 1e-14}))
         tight.fit(X, y)
         tight_evals = calls[0]
     finally:
@@ -223,6 +223,70 @@ def test_lbfgs_first_start_is_the_configured_theta():
 
     # multi-start keeps the best, so it is never worse than the single warm start
     assert multi.model["f"] <= plain.model["f"] + 1e-9
+
+
+def test_lbfgs_default_options_relaxed_with_bounded_evals():
+    # the bare optimizer carries relaxed tolerances and a low evaluation cap, since
+    # each objective evaluation runs a full O(n^3) fit.
+    assert LBFGS().options == {"gtol": 1e-3, "ftol": 1e-6, "maxfun": 100}
+
+
+def test_lbfgs_options_passthrough_reaches_scipy():
+    # scipy L-BFGS-B options pass through verbatim, and a key given in `options`
+    # overrides the relaxed default (here gtol) while untouched defaults remain.
+    import pydacefit.optimizers.lbfgs as lb
+
+    rng = np.random.default_rng(7)
+    X = rng.random((18, 1))
+    y = np.sum(np.sin(X * 3.0), axis=1)
+
+    seen = []
+    real_minimize = lb.minimize
+
+    def recording(*a, **k):
+        seen.append(k.get("options"))
+        return real_minimize(*a, **k)
+
+    lb.minimize = recording
+    try:
+        model = DACE(
+            regr=CONSTANT,
+            corr=GAUSS,
+            theta=1.0,
+            thetaL=1e-4,
+            thetaU=100.0,
+            optimizer=LBFGS(options={"maxiter": 7, "gtol": 1e-1}),
+        )
+        model.fit(X, y)
+    finally:
+        lb.minimize = real_minimize
+
+    assert seen  # minimize was actually called
+    opts = seen[0]
+    assert opts["maxiter"] == 7  # extra option forwarded through to scipy
+    assert opts["gtol"] == 1e-1  # repeated key overrides the relaxed default
+    assert opts["ftol"] == 1e-6 and opts["maxfun"] == 100  # untouched defaults remain
+    assert np.all(np.isfinite(model.predict(rng.random((4, 1))).y))
+
+
+def test_lbfgs_exposes_optimization_record():
+    # the fit must surface the optimizer result on model.optimization: eval counts,
+    # per-start scipy results, and a start count that tracks n_restarts.
+    rng = np.random.default_rng(9)
+    X = rng.random((20, 1))
+    y = np.sum(np.sin(X * 3.0), axis=1)
+
+    model = DACE(regr=CONSTANT, corr=GAUSS, theta=1.0, thetaL=1e-4, thetaU=100.0, optimizer=LBFGS(n_restarts=3))
+    model.fit(X, y)
+
+    rec = model.optimization
+    assert rec is not None
+    assert rec["n_starts"] == 4  # the warm start + 3 restarts
+    assert len(rec["results"]) == 4  # one scipy OptimizeResult per start
+    assert rec["nit"] >= 1 and rec["nfev"] >= 1  # aggregate iteration / eval counts
+    assert isinstance(rec["success"], bool)
+    assert all(hasattr(r, "nit") and hasattr(r, "message") for r in rec["results"])  # raw scipy results
+    assert rec["best"] is model.model or "gamma" in rec["best"]  # the chosen fit is in the record
 
 
 # --- pre-existing bug fix: a Python-list theta (ARD) no longer crashes boxmin ---

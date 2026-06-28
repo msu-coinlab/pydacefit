@@ -131,7 +131,10 @@ def test_lbfgs_as_configured_optimizer():
     X0 = rng.random((12, 1))
     model = _model(optimizer=LBFGS())
     model.fit(X0, _fun(X0))
-    assert model.itpar is None  # lbfgs leaves no boxmin trajectory
+    # LBFGS now records its search on model.optimization (a single warm start here)
+    assert model.optimization is not None
+    assert model.optimization["n_starts"] == 1
+    assert model.optimization["nfev"] >= 1
     pred = model.predict(np.linspace(0, 1, 10)[:, None]).y
     assert np.all(np.isfinite(pred))
 

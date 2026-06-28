@@ -45,8 +45,9 @@ class Optimizer(ABC):
         Returns
         -------
         tuple
-            ``(model, itpar)`` -- the chosen fit() result and a search trajectory
-            (a dict for Boxmin, or None when there is none).
+            ``(model, optimization)`` -- the chosen fit() result and a record of the
+            search (a dict with at least ``"best"`` and ``"models"``; None when the
+            optimizer does no search, e.g. ``Fixed``). It lands on ``DACE.optimization``.
         """
 
     def _select(self, dace, candidates, validation=None):

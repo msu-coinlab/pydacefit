@@ -121,8 +121,9 @@ class DACE:
         self.noise = noise
         self.max_noise = max_noise
 
-        # intermediate steps saved during hyperparameter optimization
-        self.itpar = None
+        # record of the hyperparameter optimization (search trajectory + diagnostics),
+        # populated by the optimizer on fit; None until then / for a fixed theta.
+        self.optimization = None
 
     def fit(self, X, Y, validation=None, append=True):
         """Fit the model, optionally selecting theta on a held-out subset of the rows.
@@ -194,15 +195,15 @@ class DACE:
                 )
             train = ~mask
             self.model = {"nX": nX[train], "nY": nY[train], **stats}
-            selected, self.itpar = self.optimizer.optimize(self, validation=(nX[mask], nY[mask]))
+            selected, self.optimization = self.optimizer.optimize(self, validation=(nX[mask], nY[mask]))
 
             if append:
                 # theta is chosen -> refit the final model on ALL rows so predict uses
                 # every label (honoring the noise / max_noise policy, like any committed fit).
                 # The theta was positive-definite on the training rows; re-adding the
                 # held-out rows can in principle break that, so surface a clear,
-                # actionable error instead of a bare Cholesky failure. self.itpar keeps
-                # the train-only search trajectory for inspection.
+                # actionable error instead of a bare Cholesky failure. self.optimization
+                # keeps the train-only search trajectory for inspection.
                 try:
                     self.model = fit(
                         nX, nY, self.regr, self.kernel, selected["theta"], noise=self.noise, max_noise=self.max_noise
@@ -221,12 +222,12 @@ class DACE:
 
         elif optimize_theta:
             self.model = {"nX": nX, "nY": nY, **stats}
-            self.model, self.itpar = self.optimizer.optimize(self)
+            self.model, self.optimization = self.optimizer.optimize(self)
             Xf, Yf, nXf, nYf = X, Y, nX, nY
 
         else:
             self.model = fit(nX, nY, self.regr, self.kernel, self.theta, noise=self.noise, max_noise=self.max_noise)
-            self.itpar = None
+            self.optimization = None
             Xf, Yf, nXf, nYf = X, Y, nX, nY
 
         # keep the raw (destandardized) training data so refit() can append to it

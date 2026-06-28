@@ -99,7 +99,7 @@ class CorrectTest(unittest.TestCase):
 
                 if dacefit.tl is not None:
                     (theta_ref,) = load(name, ["theta"])
-                    my_theta = np.stack([m["theta"] for m in dacefit.itpar["models"]])
+                    my_theta = np.stack([m["theta"] for m in dacefit.optimization["models"]])
 
                     if theta_ref.ndim == 1:
                         theta_ref = theta_ref[:, None]

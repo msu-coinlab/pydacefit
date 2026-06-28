@@ -116,7 +116,7 @@ def test_validation_selects_min_heldout_in_boxmin_trajectory():
     m.fit(X, y, validation=mask, append=False)
 
     nXv, nYv = _norm(m, X[mask], y[mask])
-    feasible = [c for c in m.itpar["models"] if "gamma" in c]
+    feasible = [c for c in m.optimization["models"] if "gamma" in c]
     errs = [m._val_error(c, nXv, nYv) for c in feasible]
     chosen = m._val_error(m.model, nXv, nYv)
     assert chosen == pytest.approx(min(errs), rel=1e-12, abs=1e-12)
