@@ -81,6 +81,56 @@ class Correlation:
         return type(self).__name__
 
 
+def _product_rule(ss, dd):
+    """Gradient of a product kernel ``prod_j ss_j`` from per-dimension factors.
+
+    Args:
+        ss: Per-dimension correlation factors, shape ``(n_pairs, d)``.
+        dd: Per-dimension factor derivatives (w.r.t. the point or w.r.t. theta), shape
+            ``(n_pairs, d)``.
+
+    Returns:
+        Column ``k`` is ``prod_{j != k} ss_j * dd_k`` (the product rule applied per
+        dimension), shape ``(n_pairs, d)``.
+    """
+    out = np.zeros(ss.shape)
+    for k in range(ss.shape[1]):
+        cols = ss.copy()
+        cols[:, k] = dd[:, k]
+        out[:, k] = np.prod(cols, axis=1)
+    return out
+
+
+class ProductKernel(Correlation):
+    """A kernel that is a product of per-dimension factors ``M(t_k)``, ``t_k = theta_k |D_k|``.
+
+    Subclasses implement only ``_factor`` -- the per-dimension factor ``M(t)`` and its
+    derivative ``M'(t)`` w.r.t. the scaled distance ``t``. The product, the point-gradient
+    and the theta-gradient are written once here via the product rule, so a new
+    compact-support / Matern-style kernel needs no hand-rolled per-dimension loop (the
+    historical source of gradient bugs). Both gradients share the same leave-one-out
+    product and differ only in the chain factor: ``dt/dx_k = theta_k sign(D_k)`` for the
+    point gradient, ``dt/dtheta_k = |D_k|`` for the theta gradient. ``M'(t)`` must be 0 in
+    any clamped / compact-support region so the product rule self-zeroes there.
+    """
+
+    def _factor(self, D, theta):
+        # returns (ss, dsdt): per-dimension factor M(t) and derivative M'(t), t=theta|D|.
+        raise NotImplementedError
+
+    def __call__(self, D, theta):
+        ss, _ = self._factor(D, theta)
+        return np.prod(ss, axis=1)
+
+    def grad(self, D, theta):
+        ss, dsdt = self._factor(D, theta)
+        return _product_rule(ss, dsdt * theta * np.sign(D))
+
+    def _dtheta_per_dim(self, D, theta):
+        ss, dsdt = self._factor(D, theta)
+        return _product_rule(ss, dsdt * np.abs(D))
+
+
 class Gaussian(Correlation):
     """Gaussian (squared-exponential) kernel: ``exp(-sum_k theta_k * D_k**2)``."""
 
@@ -95,38 +145,14 @@ class Gaussian(Correlation):
         return -np.square(D) * self(D, theta)[:, None]
 
 
-class Cubic(Correlation):
+class Cubic(ProductKernel):
     """Cubic kernel: compact-support smooth correlation (zero past the length scale)."""
 
-    def __call__(self, D, theta):
-        td = np.minimum(np.abs(D) * theta, 1)
-        ss = 1 - td**2 * (3 - 2 * td)
-        r = np.prod(ss, axis=1)
-        return r
-
-    def grad(self, D, theta):
-        dr = np.zeros(D.shape)
-        td = np.minimum(np.abs(D) * theta, 1)
-        ss = 1 - td**2 * (3 - 2 * td)
-
-        for j in range(D.shape[1]):
-            _b = index_except(D.shape[1], [j])
-            _theta = theta[j] if type(theta) is np.ndarray and len(theta) == D.shape[1] else theta
-            dd = 6 * _theta * np.sign(D[:, j]) * td[:, j] * (td[:, j] - 1)
-
-            dr[:, j] = np.prod(ss[:, _b], axis=1) * dd
-        return dr
-
-    def _dtheta_per_dim(self, D, theta):
-        td = np.minimum(np.abs(D) * theta, 1)
-        ss = 1 - td**2 * (3 - 2 * td)
-        dr = np.zeros(D.shape)
-        for j in range(D.shape[1]):
-            _b = index_except(D.shape[1], [j])
-            # d s_j/d theta_j = (d s/d t)(d t/d theta) = 6 t(t-1) * |D_j| (0 at the clamp)
-            dd = 6 * td[:, j] * (td[:, j] - 1) * np.abs(D[:, j])
-            dr[:, j] = np.prod(ss[:, _b], axis=1) * dd
-        return dr
+    def _factor(self, D, theta):
+        t = np.minimum(np.abs(D) * theta, 1)
+        ss = 1 - t**2 * (3 - 2 * t)
+        dsdt = 6 * t * (t - 1)  # = -6t + 6t^2; 0 at the clamp t=1
+        return ss, dsdt
 
 
 class Exponential(Correlation):
@@ -143,130 +169,46 @@ class Exponential(Correlation):
         return -np.abs(D) * self(D, theta)[:, None]
 
 
-class Linear(Correlation):
+class Linear(ProductKernel):
     """Linear correlation kernel: ``prod_k max(1 - theta_k * |D_k|, 0)`` (compact support).
 
     The matching regression trend is named ``LinearRegression`` (in ``pydacefit.regr``),
     so this bare ``Linear`` kernel and that trend can be imported together without a clash.
     """
 
-    def __call__(self, D, theta):
-        return np.prod(np.maximum(1 - np.abs(D) * theta, 0), axis=1)
-
-    def grad(self, D, theta):
-        dr = np.zeros(D.shape)
-        td = np.maximum(1 - np.abs(D) * theta, 0)
-
-        for j in range(D.shape[1]):
-            _b = index_except(D.shape[1], [j])
-            _theta = theta[j] if type(theta) is np.ndarray and len(theta) == D.shape[1] else theta
-            # (td_j > 0) zeroes the partial in the clamped (compact-support) tail, where
-            # the factor is flat at 0 -- without it the derivative leaks a spurious -theta.
-            dr[:, j] = np.prod(td[:, _b], axis=1) * -_theta * np.sign(D[:, j]) * (td[:, j] > 0)
-        return dr
-
-    def _dtheta_per_dim(self, D, theta):
-        td = np.maximum(1 - np.abs(D) * theta, 0)
-        # d s_j/d theta_j = -|D_j| where the factor is positive, 0 in the clamped region
-        ds = -np.abs(D) * (td > 0)
-        dr = np.zeros(D.shape)
-        for j in range(D.shape[1]):
-            _b = index_except(D.shape[1], [j])
-            dr[:, j] = np.prod(td[:, _b], axis=1) * ds[:, j]
-        return dr
+    def _factor(self, D, theta):
+        ss = np.maximum(1 - np.abs(D) * theta, 0)
+        # d/dt of max(1 - t, 0) is -1 where 1 - t > 0, else 0 (flat in the clamped tail)
+        dsdt = np.where(ss > 0, -1.0, 0.0)
+        return ss, dsdt
 
 
-class Spherical(Correlation):
-    """Spherical kernel: compact-support correlation ``1 - 1.5 td + 0.5 td**3``."""
+class Spherical(ProductKernel):
+    """Spherical kernel: compact-support correlation ``1 - 1.5 t + 0.5 t**3``."""
 
-    def __call__(self, D, theta):
-        td = np.minimum(np.abs(D) * theta, 1)
-        ss = 1 - td * (1.5 - 0.5 * np.power(td, 2))
-        r = np.prod(ss, axis=1)
-        return r
-
-    def grad(self, D, theta):
-        dr = np.zeros(D.shape)
-        td = np.minimum(np.abs(D) * theta, 1)
-        ss = 1 - td * (1.5 - 0.5 * np.power(td, 2))
-
-        for j in range(D.shape[1]):
-            _theta = theta[j] if type(theta) is np.ndarray and len(theta) == D.shape[1] else theta
-            dd = 1.5 * _theta * np.sign(D[:, j]) * (td[:, j] ** 2 - 1)
-            _b = index_except(D.shape[1], [j])
-            dr[:, j] = np.prod(ss[:, _b], axis=1) * dd
-        return dr
-
-    def _dtheta_per_dim(self, D, theta):
-        td = np.minimum(np.abs(D) * theta, 1)
-        ss = 1 - td * (1.5 - 0.5 * np.power(td, 2))
-        dr = np.zeros(D.shape)
-        for j in range(D.shape[1]):
-            _b = index_except(D.shape[1], [j])
-            # d s/d t = 1.5(t^2 - 1); d t/d theta = |D_j| (both 0 at the clamp t=1)
-            dd = 1.5 * (td[:, j] ** 2 - 1) * np.abs(D[:, j])
-            dr[:, j] = np.prod(ss[:, _b], axis=1) * dd
-        return dr
+    def _factor(self, D, theta):
+        t = np.minimum(np.abs(D) * theta, 1)
+        ss = 1 - t * (1.5 - 0.5 * np.power(t, 2))
+        dsdt = 1.5 * (np.power(t, 2) - 1)  # 0 at the clamp t=1
+        return ss, dsdt
 
 
-class Spline(Correlation):
+class Spline(ProductKernel):
     """Cubic-spline kernel: piecewise-polynomial compact-support correlation."""
 
-    def __call__(self, D, theta):
+    def _factor(self, D, theta):
+        # t = |D|*theta; the factor and its derivative M'(t) are piecewise (low / mid /
+        # far). The far region (t >= 1) stays 0 in both, so the product rule self-zeroes.
+        t = np.abs(D) * theta
+        lo = t <= 0.2
+        mid = (t > 0.2) & (t < 1.0)
         ss = np.zeros(D.shape)
-        xi = np.abs(D) * theta
-
-        lo = xi <= 0.2
-        mid = (xi > 0.2) & (xi < 1.0)
-        ss[lo] = 1 - xi[lo] ** 2 * (15 - 30 * xi[lo])
-        ss[mid] = 1.25 * (1 - xi[mid]) ** 3
-
-        r = np.prod(ss, axis=1)
-        return r
-
-    def grad(self, D, theta):
-        ss = np.zeros(D.shape)
-        xi = np.abs(D) * theta
-        lo = xi <= 0.2
-        mid = (xi > 0.2) & (xi < 1.0)
-        ss[lo] = 1 - xi[lo] ** 2 * (15 - 30 * xi[lo])
-        ss[mid] = 1.25 * (1 - xi[mid]) ** 3
-
-        dr = np.zeros(D.shape)
-        n = D.shape[1]
-        u = np.sign(D) * theta  # d(xi)/d(x) = sign(D) * theta
-
-        # region masks key on the scaled distance xi (= |D|*theta), NOT on u.
-        # d/d(xi) of the low branch is (90 xi - 30) xi; of 1.25(1-xi)^3 is -3.75(1-xi)^2;
-        # chain by u for d/d(x).
-        dr[lo] = u[lo] * ((90 * xi[lo] - 30) * xi[lo])
-        dr[mid] = -3.75 * u[mid] * (1 - xi[mid]) ** 2
-
-        for j in range(n):
-            _ss = np.copy(ss)
-            _ss[:, j] = dr[:, j]
-            dr[:, j] = np.prod(_ss, axis=1)
-
-        return dr
-
-    def _dtheta_per_dim(self, D, theta):
-        xi = np.abs(D) * theta
-        lo = xi <= 0.2
-        mid = (xi > 0.2) & (xi < 1.0)
-        # per-dim correlation factor s_j and its derivative w.r.t. xi
-        ss = np.zeros(D.shape)
-        ss[lo] = 1 - xi[lo] ** 2 * (15 - 30 * xi[lo])
-        ss[mid] = 1.25 * (1 - xi[mid]) ** 3
-        dsdxi = np.zeros(D.shape)
-        dsdxi[lo] = -30 * xi[lo] + 90 * xi[lo] ** 2
-        dsdxi[mid] = -3.75 * (1 - xi[mid]) ** 2
-        # d s_j/d theta_j = (d s/d xi)(d xi/d theta) with d xi/d theta = |D_j|
-        ds = dsdxi * np.abs(D)
-        dr = np.zeros(D.shape)
-        for j in range(D.shape[1]):
-            _b = index_except(D.shape[1], [j])
-            dr[:, j] = np.prod(ss[:, _b], axis=1) * ds[:, j]
-        return dr
+        ss[lo] = 1 - t[lo] ** 2 * (15 - 30 * t[lo])
+        ss[mid] = 1.25 * (1 - t[mid]) ** 3
+        dsdt = np.zeros(D.shape)
+        dsdt[lo] = (90 * t[lo] - 30) * t[lo]
+        dsdt[mid] = -3.75 * (1 - t[mid]) ** 2
+        return ss, dsdt
 
 
 class GeneralizedExponential(Correlation):
@@ -369,7 +311,7 @@ class RationalQuadratic(Correlation):
         return f"RationalQuadratic(alpha={self.alpha})"
 
 
-class Matern(Correlation):
+class Matern(ProductKernel):
     """Matérn kernel (product of per-dimension Matérns), smoothness ``nu`` in {0.5, 1.5, 2.5}.
 
     ``nu`` controls smoothness: 0.5 is the rough exponential (once-continuous), 2.5 is
@@ -391,48 +333,21 @@ class Matern(Correlation):
         self.nu = nu
 
     def _factor(self, D, theta):
-        # per-dimension scaled distance s = theta_k |D_k|, the Matérn factor M(s) and its
-        # derivative M'(s) -- both (n_pairs, d). These build the product kernel and both
-        # gradients, exactly like the other product kernels (Cubic/Spherical/Spline).
-        s = np.abs(D) * theta
+        # per-dimension scaled distance t = theta_k |D_k|, the Matérn factor M(t) and its
+        # derivative M'(t) -- both (n_pairs, d). ProductKernel turns these into the kernel
+        # and both gradients via the shared product rule.
+        t = np.abs(D) * theta
         if self.nu == 0.5:
-            e = np.exp(-s)
+            e = np.exp(-t)
             return e, -e
         if self.nu == 1.5:
             c = np.sqrt(3.0)
-            e = np.exp(-c * s)
-            return (1 + c * s) * e, -3.0 * s * e
+            e = np.exp(-c * t)
+            return (1 + c * t) * e, -3.0 * t * e
         # nu == 2.5
         c = np.sqrt(5.0)
-        e = np.exp(-c * s)
-        return (1 + c * s + (5.0 / 3.0) * s**2) * e, -(5.0 / 3.0) * s * (1 + c * s) * e
-
-    def __call__(self, D, theta):
-        ss, _ = self._factor(D, theta)
-        return np.prod(ss, axis=1)
-
-    def grad(self, D, theta):
-        ss, ds = self._factor(D, theta)
-        dr = np.zeros(D.shape)
-        for j in range(D.shape[1]):
-            _b = index_except(D.shape[1], [j])
-            _theta = theta[j] if type(theta) is np.ndarray and len(theta) == D.shape[1] else theta
-            # dK/dD_j = prod_{k!=j} M_k * M'(s_j) * ds_j/dD_j, with ds_j/dD_j = theta_j sign(D_j)
-            dr[:, j] = np.prod(ss[:, _b], axis=1) * ds[:, j] * _theta * np.sign(D[:, j])
-        return dr
-
-    def _dtheta_per_dim(self, D, theta):
-        ss, ds = self._factor(D, theta)
-        dr = np.zeros(D.shape)
-        for j in range(D.shape[1]):
-            _b = index_except(D.shape[1], [j])
-            # dK/d theta_j = prod_{k!=j} M_k * M'(s_j) * ds_j/d theta_j, with ds_j/d theta_j = |D_j|
-            dr[:, j] = np.prod(ss[:, _b], axis=1) * ds[:, j] * np.abs(D[:, j])
-        return dr
+        e = np.exp(-c * t)
+        return (1 + c * t + (5.0 / 3.0) * t**2) * e, -(5.0 / 3.0) * t * (1 + c * t) * e
 
     def __repr__(self):
         return f"Matern(nu={self.nu})"
-
-
-def index_except(n, indices):
-    return [i for i in range(n) if i not in indices]
