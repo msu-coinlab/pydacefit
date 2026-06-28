@@ -1,4 +1,4 @@
-"""Smoke test: execute pydacefit/usage.py end-to-end with a headless backend."""
+"""Smoke test: execute src/pydacefit/usage.py end-to-end with a headless backend."""
 
 import os
 import unittest
@@ -7,7 +7,8 @@ import unittest
 class UsageTest(unittest.TestCase):
     def test(self):
 
-        USAGE_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.realpath(__file__))), "pydacefit")
+        repo_root = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+        USAGE_DIR = os.path.join(repo_root, "src", "pydacefit")
 
         print(USAGE_DIR)
         for fname in ["usage.py"]:

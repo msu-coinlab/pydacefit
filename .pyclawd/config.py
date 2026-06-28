@@ -5,12 +5,12 @@ from pyclawd import DoctorConfig, GoldenConfig, Project, QualityConfig, TestConf
 project = Project(
     name="pydacefit",
     conda_env="default",
-    root_markers=["setup.py", "pydacefit/__init__.py"],
+    root_markers=["pyproject.toml", "src/pydacefit/__init__.py"],
     # The pyclawd this config was built on. `pyclawd doctor` WARNs if the
     # running pyclawd has drifted to a different minor (migration may be needed).
     pyclawd_version="0.1.0",
     # Default directory `pyclawd ls` lists (the code/source root).
-    src_dir="pydacefit",
+    src_dir="src/pydacefit",
     quality=QualityConfig(
         lint_cmd=["ruff", "check"],
         lint_fix_cmd=["ruff", "check", "--fix"],

@@ -15,7 +15,7 @@ Usage
 
 .. code:: python
 
-    {% macro someop() %}{% include "pydacefit/usage.py" %}{% endmacro %}
+    {% macro someop() %}{% include "src/pydacefit/usage.py" %}{% endmacro %}
     {{ someop()|indent }}
 
 Contact

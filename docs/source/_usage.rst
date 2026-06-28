@@ -4,7 +4,7 @@ Python an actual object is used which provide the functions fit and predict.
 
 The following shows how to use this framework:
 
-.. literalinclude:: ../../pydacefit/usage.py
+.. literalinclude:: ../../src/pydacefit/usage.py
    :language: python
 
 

@@ -1,1 +1,1 @@
-recursive-include pydacefit *.py
+recursive-include src/pydacefit *.py
